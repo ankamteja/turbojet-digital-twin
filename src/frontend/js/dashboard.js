@@ -4,6 +4,7 @@
 // shaft spin, auto-rotate) lives in main.js / scene.js.
 
 import * as scene from './scene.js';
+import { getSimulate } from './api.js';
 
 // Health bands shared across the whole HUD (matches backend _alert_for cuts).
 //   >=0.90 green / NOMINAL, 0.85–0.90 yellow / CAUTION, <0.85 red / WARNING
@@ -171,24 +172,138 @@ function fmt(v) {
 }
 
 // ---- Health Trend (was "Vibration Trend"): overall health polyline ----
-// The SVG viewBox is 220x90 with the plot area x∈[20,220], y∈[0,82].
+// The SVG viewBox is 220x90 with the plot area x∈[20,220], y∈[6,82] and health
+// scaled 0.70..1.0 across the vertical span so degradation is visible.
+//
+// Both the observed trend and the projected drill-down (Feature 1) share one
+// cycle→x mapping so the dashed projection continues seamlessly from the solid
+// observed line. The x-domain spans [minCycle, maxCycle], where maxCycle is
+// stretched to the projection horizon while a stage is selected.
+const PLOT = { x0: 20, x1: 220, yTop: 6, yBot: 82, lo: 0.70, hi: 1.0 };
+
+// Current cycle domain for the trend chart, updated by renderTrend and reused
+// by the projection so the two lines align on the same axis.
+let trendDomain = { min: 1, max: 30 };
+
+function healthToY(v) {
+  const norm = Math.max(0, Math.min(1, (v - PLOT.lo) / (PLOT.hi - PLOT.lo)));
+  return PLOT.yBot - norm * (PLOT.yBot - PLOT.yTop);
+}
+
+function cycleToX(cycle) {
+  const { min, max } = trendDomain;
+  if (max === min) return PLOT.x0;
+  const t = (cycle - min) / (max - min);
+  return PLOT.x0 + Math.max(0, Math.min(1, t)) * (PLOT.x1 - PLOT.x0);
+}
+
 function renderTrend(state) {
   const hist = state.history;
   if (!hist.length) return;
-  const x0 = 20, x1 = 220, yTop = 6, yBot = 82;
-  // Scale health 0.7..1.0 across the vertical span so degradation is visible.
-  const lo = 0.70, hi = 1.0;
-  const pts = hist.map((p, i) => {
-    const x = hist.length === 1 ? x0 : x0 + (i / (hist.length - 1)) * (x1 - x0);
-    const norm = Math.max(0, Math.min(1, (p.overall - lo) / (hi - lo)));
-    const y = yBot - norm * (yBot - yTop);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
+
+  // Domain: observed cycles, extended to the projection horizon if a stage is
+  // selected (so the dashed future line has room). Recompute on every render.
+  trendDomain.min = hist[0].cycle;
+  const observedMax = hist[hist.length - 1].cycle;
+  trendDomain.max = Math.max(observedMax, projHorizonCycle || observedMax);
+
+  const pts = hist.map(p => `${cycleToX(p.cycle).toFixed(1)},${healthToY(p.overall).toFixed(1)}`);
   const line = document.getElementById('trendLine');
   line.setAttribute('points', pts.join(' '));
-  // Recolour the line by the latest health band.
-  const b = band(hist[hist.length - 1].overall);
+  const b = band(observedMax != null ? hist[hist.length - 1].overall : 1);
   line.setAttribute('stroke', b === 'red' ? 'var(--red)' : b === 'yellow' ? 'var(--yellow)' : 'var(--green-solid)');
+
+  renderConfidenceBand(state, hist);
+  // Keep any active stage projection aligned to the (possibly new) domain.
+  if (projStage) drawProjection();
+}
+
+// ---- Feature 2: confidence band around the overall trend ----
+// A faint shaded area whose half-width scales with uncertainty = 1 - confidence.
+// Lower confidence => wider band. Rendered as a filled polygon (upper edge then
+// lower edge reversed) behind the trend line.
+function renderConfidenceBand(state, hist) {
+  const poly = document.getElementById('trendBand');
+  if (!poly) return;
+  const conf = state.health.overall.confidence;
+  const uncertainty = Math.max(0, Math.min(1, 1 - conf));
+  // Constant half-width per point, in viewBox units, scaled by uncertainty.
+  // Max ~14 units (~18% of the 76-unit plot height) at zero confidence.
+  const halfW = uncertainty * 14;
+  if (halfW < 0.01) { poly.setAttribute('points', ''); return; }
+
+  const clampY = y => Math.max(PLOT.yTop, Math.min(PLOT.yBot, y));
+  const upper = hist.map(p => {
+    const x = cycleToX(p.cycle);
+    return `${x.toFixed(1)},${clampY(healthToY(p.overall) - halfW).toFixed(1)}`;
+  });
+  const lower = hist.slice().reverse().map(p => {
+    const x = cycleToX(p.cycle);
+    return `${x.toFixed(1)},${clampY(healthToY(p.overall) + halfW).toFixed(1)}`;
+  });
+  poly.setAttribute('points', upper.concat(lower).join(' '));
+  const b = band(hist[hist.length - 1].overall);
+  poly.setAttribute('fill', b === 'red' ? 'rgba(255,59,59,0.10)' : b === 'yellow' ? 'rgba(255,204,0,0.10)' : 'rgba(80,255,120,0.10)');
+}
+
+// ---- Feature 1: projected future degradation drill-down ----
+// When a stage is selected we fetch getSimulate(engine, maxCycle+20) and plot
+// that component's projected health[] over cycles[]. The observed portion
+// (cycle <= projected_from_cycle) reuses the solid trend styling; the future
+// portion is drawn here as a DASHED line beyond the current data.
+let projStage = null;            // selected stage key we are projecting, or null
+let projData = null;             // last getSimulate component payload {health, cycles, projected_from_cycle}
+let projHorizonCycle = null;     // furthest projected cycle (extends trend domain)
+
+// Fetch + cache a projection for the selected stage, then draw it.
+export async function projectStage(engineId, stage) {
+  projStage = stage === 'fan' ? 'overall' : stage;
+  try {
+    const maxCycle = trendDomain.max || (lastState ? lastState.cycle : 1);
+    const sim = await getSimulate(engineId, maxCycle + 20);
+    const comp = sim.components[projStage];
+    if (!comp) { clearProjection(); return; }
+    projData = {
+      cycles: sim.cycles,
+      health: comp.health,
+      projectedFrom: comp.projected_from_cycle,
+    };
+    projHorizonCycle = sim.cycles[sim.cycles.length - 1];
+    // Re-run trend so the domain stretches to the horizon, then draw projection.
+    if (lastState) renderTrend(lastState);
+    else drawProjection();
+  } catch (err) {
+    console.error('[JET] projection fetch failed:', err);
+    clearProjection();
+  }
+}
+
+// Draw only the FUTURE (cycle > projected_from_cycle) portion as a dashed line.
+function drawProjection() {
+  const line = document.getElementById('projLine');
+  if (!line || !projData) return;
+  const { cycles, health, projectedFrom } = projData;
+  const pts = [];
+  for (let i = 0; i < cycles.length; i++) {
+    if (cycles[i] <= projectedFrom) continue;   // observed part stays solid
+    pts.push(`${cycleToX(cycles[i]).toFixed(1)},${healthToY(health[i]).toFixed(1)}`);
+  }
+  // Anchor the dashed line to the last observed projected point so it connects.
+  const anchorIdx = cycles.findIndex(c => c > projectedFrom) - 1;
+  if (anchorIdx >= 0) {
+    pts.unshift(`${cycleToX(cycles[anchorIdx]).toFixed(1)},${healthToY(health[anchorIdx]).toFixed(1)}`);
+  }
+  line.setAttribute('points', pts.join(' '));
+}
+
+// Clear the projection (stage deselected) and collapse the trend domain back.
+export function clearProjection() {
+  projStage = null;
+  projData = null;
+  projHorizonCycle = null;
+  const line = document.getElementById('projLine');
+  if (line) line.setAttribute('points', '');
+  if (lastState) renderTrend(lastState);
 }
 
 // ---- Structural radar: 4 axes = compressor, combustor, turbine, overall ----

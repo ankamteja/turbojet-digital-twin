@@ -11,6 +11,10 @@ import * as scene from './scene.js';
 import * as dashboard from './dashboard.js';
 import { initControls } from './controls.js';
 
+// The active controls handle — lets the stage-selection path know which engine
+// to request a projection for.
+let controls = null;
+
 // Fetch one state snapshot and paint it. Errors are surfaced in the system log
 // so a dead backend is visible rather than silent.
 async function loadState(engineId, cycle) {
@@ -34,8 +38,15 @@ function syncStageButtons(active) {
 // Called when a stage is (de)selected — from a button click or the 3D scene.
 function onStageSelected(active) {
   syncStageButtons(active);
-  if (active) dashboard.renderStageDetail(active);
-  else dashboard.clearStageDetail();
+  if (active) {
+    dashboard.renderStageDetail(active);
+    // Feature 1: fetch + draw the projected future degradation drill-down for
+    // the selected stage on the Health Trend chart.
+    if (controls) dashboard.projectStage(controls.getEngineId(), active);
+  } else {
+    dashboard.clearStageDetail();
+    dashboard.clearProjection();
+  }
 }
 
 async function boot() {
@@ -55,9 +66,13 @@ async function boot() {
   scene.init(onStageSelected);
 
   // 3. controls own current engine/cycle; they call back on change.
-  initControls({
+  controls = initControls({
     engines,
-    onEngineChange: () => { /* cycle change fires alongside; nothing extra */ },
+    onEngineChange: (engineId) => {
+      // If a stage is selected, re-project against the newly selected engine.
+      const active = scene.getActiveStage();
+      if (active) dashboard.projectStage(engineId, active);
+    },
     onCycleChange: (engineId, cycle) => loadState(engineId, cycle),
   });
 

@@ -146,6 +146,10 @@
         </g>
         <line x1="20" y1="0" x2="20" y2="90" stroke="rgba(255,255,255,0.14)"/>
         <line x1="20" y1="82" x2="220" y2="82" stroke="rgba(255,255,255,0.14)"/>
+        <!-- Confidence band (faint shaded area) behind the overall trend line. -->
+        <polygon id="trendBand" fill="rgba(80,255,120,0.10)" stroke="none"/>
+        <!-- Projected future degradation for the selected stage (dashed). -->
+        <polyline id="projLine" fill="none" stroke="var(--ink-dim)" stroke-width="1.1" stroke-dasharray="4 3" opacity="0.85"/>
         <polyline id="trendLine" fill="none" stroke="var(--green-solid)" stroke-width="1.2" opacity="0.7"/>
       </svg>
     </div>
