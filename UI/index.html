@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TF-9 // TURBOFAN X-RAY DIAGNOSTIC</title>
+<meta name="description" content="Advanced jet engine diagnostic interface with dual 3D model visualization, real-time telemetry, and health monitoring">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+
+<!-- Three.js + loaders via importmap -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<style>
+  :root{
+    --bg: #030405;
+    --panel-bg: rgba(8, 10, 12, 0.55);
+    --line: rgba(232, 236, 240, 0.16);
+    --line-strong: rgba(232, 236, 240, 0.4);
+    --ink: #e9edf1;
+    --ink-dim: #7d8791;
+    --ink-faint: #4a5158;
+    --red: #ff3b3b;
+    --yellow: #ffcc00;
+    --green-hl: rgba(80, 255, 120, 0.35);
+    --green-solid: #50ff78;
+    --c-fan: #4fd8ff;
+    --c-compressor: #ffb347;
+    --c-combustor: #ff4d4d;
+    --c-turbine: #b98bff;
+    --accent: var(--red);
+    --mono: 'JetBrains Mono', monospace;
+    --disp: 'Rajdhani', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:var(--mono); overflow:hidden;
+  }
+  body{
+    background-image:
+      radial-gradient(ellipse at 50% 0%, rgba(90,110,130,0.08), transparent 60%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.014) 0px, rgba(255,255,255,0.014) 1px, transparent 1px, transparent 3px);
+  }
+  .app{
+    display:grid;
+    grid-template-rows: 46px 1fr 150px;
+    grid-template-columns: 260px 1fr 260px;
+    grid-template-areas:
+      "top top top"
+      "left center right"
+      "bottom bottom bottom";
+    height:100vh; width:100vw; padding:10px; gap:10px;
+  }
+
+  /* ---------- shared panel chrome ---------- */
+  .panel{
+    position:relative; border:1px solid var(--line); background:var(--panel-bg);
+    padding:10px 12px 12px; display:flex; flex-direction:column; min-height:0;
+    backdrop-filter: blur(2px);
+  }
+  .panel::before, .panel::after,
+  .panel .corner-tl, .panel .corner-br{ content:''; }
+  .panel .corner{
+    position:absolute; width:9px; height:9px; border-color:var(--line-strong); pointer-events:none;
+  }
+  .panel .corner.tl{ top:-1px; left:-1px; border-top:1px solid; border-left:1px solid; }
+  .panel .corner.tr{ top:-1px; right:-1px; border-top:1px solid; border-right:1px solid; }
+  .panel .corner.bl{ bottom:-1px; left:-1px; border-bottom:1px solid; border-left:1px solid; }
+  .panel .corner.br{ bottom:-1px; right:-1px; border-bottom:1px solid; border-right:1px solid; }
+
+  .panel-title{
+    font-family:var(--disp); font-size:11px; font-weight:700; letter-spacing:.14em;
+    color:var(--ink-dim); text-transform:uppercase; margin:0 0 8px; padding-bottom:6px;
+    border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;
+  }
+  .panel-title .dot{ width:5px; height:5px; border-radius:50%; background:var(--ink-faint); }
+  .panel-title.live .dot{ background:var(--accent); box-shadow:0 0 6px var(--accent); animation: blink 2.2s infinite; }
+  @keyframes blink{ 0%,100%{opacity:1;} 50%{opacity:.25;} }
+
+  .col{ display:flex; flex-direction:column; gap:10px; min-height:0; }
+  #left{ grid-area:left; }
+  #right{ grid-area:right; }
+  #center{ grid-area:center; position:relative; min-height:0; }
+  #top{ grid-area:top; }
+  #bottom{ grid-area:bottom; display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; }
+
+  /* ---------- top bar ---------- */
+  #top{
+    display:flex; align-items:center; justify-content:space-between;
+    border:1px solid var(--line); padding:0 16px; background:var(--panel-bg);
+  }
+  .brand{ display:flex; align-items:center; gap:10px; }
+  .brand .mark{ width:16px; height:16px; border:1px solid var(--accent); position:relative; }
+  .brand .mark::after{ content:''; position:absolute; inset:3px; background:var(--accent); opacity:.6; }
+  .brand h1{
+    font-family:var(--disp); font-size:15px; font-weight:700; letter-spacing:.22em; margin:0;
+    color:var(--ink);
+  }
+  .brand h1 span{ color:var(--accent); }
+  .status-chips{ display:flex; gap:18px; align-items:center; }
+  .chip{ font-size:10px; letter-spacing:.08em; color:var(--ink-dim); display:flex; gap:6px; align-items:center; }
+  .chip .led{ width:6px; height:6px; border-radius:50%; background:#3a4046; }
+  .chip.on .led{ background:#5cff9d; box-shadow:0 0 6px #5cff9d; }
+  .chip.warn .led{ background:var(--accent); box-shadow:0 0 6px var(--accent); }
+
+  /* ---------- left column contents ---------- */
+  .stage-select{ display:flex; flex-direction:column; gap:6px; }
+  .stage-btn{
+    display:flex; align-items:center; gap:9px; background:transparent;
+    border:1px solid var(--line); color:var(--ink-dim); font-family:var(--mono);
+    font-size:11px; letter-spacing:.04em; padding:8px 9px; cursor:pointer; text-align:left;
+    transition: border-color .25s, color .25s, background .25s, box-shadow .25s;
+    position: relative; overflow: hidden;
+  }
+  .stage-btn .swatch{ width:9px; height:9px; border:1px solid currentColor; flex:0 0 auto; }
+  .stage-btn .n{ color:var(--ink-faint); font-size:10px; width:14px; flex:0 0 auto; }
+  .stage-btn:hover{ border-color:var(--line-strong); color:var(--ink); }
+  .stage-btn.active{
+    color: var(--green-solid);
+    border-color: var(--green-solid);
+    background: var(--green-hl);
+    box-shadow: 0 0 15px rgba(80, 255, 120, 0.15), inset 0 0 20px rgba(80, 255, 120, 0.05);
+  }
+  .stage-btn.active .swatch{
+    background: var(--green-solid);
+    box-shadow: 0 0 8px var(--green-solid);
+  }
+  .stage-btn.active::before{
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(90deg, rgba(80,255,120,0.08), transparent);
+    pointer-events: none;
+  }
+
+  .ring-wrap{ display:flex; align-items:center; justify-content:center; padding:6px 0 2px; }
+  .log-table{ font-size:9.5px; color:var(--ink-faint); line-height:1.7; overflow:hidden; flex:1; }
+  .log-table .row{ display:flex; justify-content:space-between; border-bottom:1px dashed rgba(255,255,255,0.06); padding:1px 0; }
+  .log-table .row span:first-child{ color:var(--ink-dim); }
+  .log-table .row.flag{ color:var(--red); }
+
+  /* ---------- health toggle ---------- */
+  .health-toggle-wrap{
+    display: flex; align-items: center; gap: 10px; padding: 8px 0 4px;
+  }
+  .toggle-track{
+    width: 36px; height: 18px; border-radius: 9px; background: rgba(255,255,255,0.1);
+    border: 1px solid var(--line); cursor: pointer; position: relative;
+    transition: background .3s, border-color .3s;
+  }
+  .toggle-track.on{
+    background: rgba(255, 60, 60, 0.25);
+    border-color: var(--red);
+  }
+  .toggle-knob{
+    position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+    border-radius: 50%; background: var(--ink-dim);
+    transition: transform .25s, background .25s;
+  }
+  .toggle-track.on .toggle-knob{
+    transform: translateX(18px);
+    background: var(--red);
+    box-shadow: 0 0 8px var(--red);
+  }
+  .toggle-label{
+    font-size: 10px; letter-spacing: .08em; color: var(--ink-dim);
+    text-transform: uppercase;
+  }
+  .toggle-label.on{ color: var(--red); }
+  .health-indicator{
+    display: flex; gap: 6px; align-items: center; margin-left: auto;
+  }
+  .health-dot{
+    width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint);
+    transition: background .4s, box-shadow .4s;
+  }
+  .health-dot.yellow{ background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  .health-dot.red{ background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+
+  /* ---------- center / viewport ---------- */
+  #viewport-frame{
+    position:absolute; inset:0; border:1px solid var(--line); overflow:hidden;
+    background: radial-gradient(ellipse at 50% 45%, rgba(60,75,90,0.14), rgba(0,0,0,0) 65%);
+  }
+  #engine-canvas{ width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  #engine-canvas.dragging{ cursor:grabbing; }
+  .viewport-hud{ position:absolute; inset:0; pointer-events:none; }
+  .vh-corner{ position:absolute; font-size:9.5px; color:var(--ink-faint); letter-spacing:.06em; }
+  .vh-corner.tl{ top:12px; left:14px; }
+  .vh-corner.tr{ top:12px; right:14px; text-align:right; }
+  .vh-corner.bl{ bottom:12px; left:14px; }
+  .vh-corner.br{ bottom:12px; right:14px; text-align:right; }
+  .vh-corner b{ color:var(--ink-dim); font-weight:600; }
+  #stageLabel{ color:var(--ink); font-family:var(--disp); font-size:13px; letter-spacing:.1em; }
+  #stageLabel.active{ color: var(--green-solid); text-shadow: 0 0 8px rgba(80,255,120,0.4); }
+  .reticle{ position:absolute; top:50%; left:50%; width:1px; height:14px; background:var(--line); transform:translate(-50%,-50%); }
+  .reticle::after{ content:''; position:absolute; top:50%; left:50%; width:14px; height:1px; background:var(--line); transform:translate(-50%,-50%); }
+  .drag-hint{
+    position:absolute; bottom:14px; left:50%; transform:translateX(-50%);
+    font-size:9.5px; color:var(--ink-faint); letter-spacing:.08em; opacity:.8;
+  }
+  .loading-overlay{
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; z-index: 10;
+    background: rgba(3,4,5,0.85);
+    transition: opacity .5s;
+  }
+  .loading-overlay.hidden{ opacity: 0; pointer-events: none; }
+  .loading-spinner{
+    width: 40px; height: 40px; border: 2px solid var(--line);
+    border-top-color: var(--green-solid); border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+  .loading-text{
+    margin-top: 12px; font-size: 10px; letter-spacing: .12em;
+    color: var(--ink-dim); text-transform: uppercase;
+  }
+
+  /* ---------- right column contents ---------- */
+  .metric-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px 10px; }
+  .metric{ border-left:1px solid var(--line); padding-left:8px; transition: border-color .3s; }
+  .metric .lbl{ font-size:8.5px; color:var(--ink-faint); letter-spacing:.08em; text-transform:uppercase; }
+  .metric .val{
+    font-size:15px; color:var(--ink); font-weight:500; margin-top:2px;
+    transition: color .3s;
+  }
+  .metric .val small{ font-size:9px; color:var(--ink-dim); margin-left:3px; font-weight:400; }
+  .metric.dim .val{ color:var(--ink-faint); }
+  .metric.alert-yellow .val{ color: var(--yellow); }
+  .metric.alert-red .val{ color: var(--red); }
+  .metric.alert-yellow{ border-left-color: var(--yellow); }
+  .metric.alert-red{ border-left-color: var(--red); }
+
+  #stageDetail{ font-size:10.5px; line-height:1.9; color:var(--ink-dim); flex:1; }
+  #stageDetail .k{ color:var(--ink-faint); }
+  #stageDetail .v{ color:var(--ink); float:right; }
+  #stageDetail .drow{ display:flex; justify-content:space-between; border-bottom:1px dashed rgba(255,255,255,0.06); padding:2px 0; }
+
+  .chart-blank{ flex:1; min-height:60px; }
+
+  /* ---------- bottom row ---------- */
+  #bottom .panel{ padding:8px 10px 10px; }
+  .bar-blank{ display:flex; align-items:flex-end; gap:3px; height:46px; }
+  .bar-blank i{
+    flex:1; border-top:1px solid var(--line-strong);
+    transition: background .5s, height .5s;
+  }
+
+  ::selection{ background:var(--accent); color:#000; }
+
+  /* pulse animation for health alerts */
+  @keyframes pulse-red{
+    0%,100%{ box-shadow: 0 0 4px rgba(255,59,59,0.3); }
+    50%{ box-shadow: 0 0 12px rgba(255,59,59,0.6); }
+  }
+  @keyframes pulse-yellow{
+    0%,100%{ box-shadow: 0 0 4px rgba(255,204,0,0.3); }
+    50%{ box-shadow: 0 0 12px rgba(255,204,0,0.6); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- TOP BAR -->
+  <div id="top">
+    <div class="brand">
+      <div class="mark"></div>
+      <h1>TF-9 <span>//</span> TURBOFAN X-RAY DIAGNOSTIC</h1>
+    </div>
+    <div class="status-chips">
+      <div class="chip on"><span class="led"></span>PWR</div>
+      <div class="chip on"><span class="led"></span>SIM ACTIVE</div>
+      <div class="chip"><span class="led"></span>AUTO-ALIGN</div>
+      <div class="chip warn" id="thrChip"><span class="led"></span><span id="thrVal">THR 72%</span></div>
+      <div class="chip on"><span class="led"></span>SYS CHECK</div>
+      <div class="chip on"><span class="led"></span>SECURE LINK</div>
+    </div>
+  </div>
+
+  <!-- LEFT COLUMN -->
+  <div id="left" class="col">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">Stage Select<span class="dot"></span></div>
+      <div class="stage-select" id="stageSelect">
+        <button class="stage-btn" data-stage="fan"><span class="n">01</span><span class="swatch" style="color:var(--c-fan)"></span>FAN</button>
+        <button class="stage-btn" data-stage="compressor"><span class="n">02</span><span class="swatch" style="color:var(--c-compressor)"></span>COMPRESSOR</button>
+        <button class="stage-btn" data-stage="combustor"><span class="n">03</span><span class="swatch" style="color:var(--c-combustor)"></span>COMBUSTOR</button>
+        <button class="stage-btn" data-stage="turbine"><span class="n">04</span><span class="swatch" style="color:var(--c-turbine)"></span>TURBINE</button>
+      </div>
+    </div>
+
+
+
+    <div class="panel" style="flex:0 0 auto;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title"><span>Health Sim</span><div class="health-indicator"><span class="health-dot" id="hDot1"></span><span class="health-dot" id="hDot2"></span><span class="health-dot" id="hDot3"></span></div></div>
+      <div class="health-toggle-wrap">
+        <div class="toggle-track" id="healthToggle">
+          <div class="toggle-knob"></div>
+        </div>
+        <span class="toggle-label" id="healthLabel">DEGRADATION OFF</span>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:0 0 auto;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Alert Ring</div>
+      <div class="ring-wrap"><svg width="92" height="92" viewBox="0 0 92 92" id="alertRing">
+        <circle cx="46" cy="46" r="40" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+        <circle cx="46" cy="46" r="40" fill="none" stroke="var(--ink-dim)" stroke-width="1" stroke-dasharray="4 6"/>
+        <circle cx="46" cy="46" r="33" fill="none" stroke="rgba(255,255,255,0.14)" stroke-width="1"/>
+        <path d="M46 30 L58 54 L34 54 Z" fill="none" stroke="var(--ink)" stroke-width="1.4" stroke-linejoin="round" id="alertTriangle"/>
+        <text x="46" y="52" font-size="9" fill="var(--ink)" text-anchor="middle" font-family="JetBrains Mono">!</text>
+      </svg></div>
+    </div>
+
+    <div class="panel" style="flex:1;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Cycle Log</div>
+      <div class="log-table" id="cycleLog"></div>
+    </div>
+  </div>
+
+  <!-- CENTER VIEWPORT -->
+  <div id="center">
+    <div id="viewport-frame">
+      <canvas id="engine-canvas"></canvas>
+
+      <div class="viewport-hud">
+        <div class="vh-corner tl">SYS ID 3047<br><b>MODEL:</b> TF-9 TURBOFAN</div>
+        <div class="vh-corner tr"><span id="orbVel">ORB-VEL 7.8KM/S</span><br><b>SIG</b> <span id="sigVal">95%</span></div>
+        <div class="vh-corner bl">STAGE &gt;&gt; <span id="stageLabel" class="none">NONE SELECTED</span></div>
+        <div class="vh-corner br"><span id="healthStatus">HEALTH: NOMINAL</span><br><b>LOC</b>-7129</div>
+        <div class="reticle"></div>
+        <div class="drag-hint">DRAG TO ROTATE &nbsp;·&nbsp; SCROLL TO ZOOM</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN -->
+  <div id="right" class="col">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">Performance<span class="dot"></span></div>
+      <div class="metric-grid" id="perfGrid">
+        <div class="metric" id="m-n1"><div class="lbl">N1 Speed</div><div class="val"><span class="mv">92.4</span> <small>%</small></div></div>
+        <div class="metric" id="m-n2"><div class="lbl">N2 Speed</div><div class="val"><span class="mv">88.1</span> <small>%</small></div></div>
+        <div class="metric" id="m-egt"><div class="lbl">EGT</div><div class="val"><span class="mv">648</span> <small>°C</small></div></div>
+        <div class="metric" id="m-thrust"><div class="lbl">Thrust</div><div class="val"><span class="mv">124.6</span> <small>kN</small></div></div>
+        <div class="metric" id="m-fuel"><div class="lbl">Fuel Flow</div><div class="val"><span class="mv">2840</span> <small>kg/h</small></div></div>
+        <div class="metric" id="m-oil"><div class="lbl">Oil Press</div><div class="val"><span class="mv">52</span> <small>psi</small></div></div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:0 0 auto;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Stage Detail</div>
+      <div id="stageDetail">
+        <div class="drow"><span class="k">Selected</span><span class="v">—</span></div>
+        <div class="drow"><span class="k">Blade Count</span><span class="v">--</span></div>
+        <div class="drow"><span class="k">Stage Temp</span><span class="v">-- °C</span></div>
+        <div class="drow"><span class="k">Pressure Ratio</span><span class="v">--</span></div>
+        <div class="drow"><span class="k">Material</span><span class="v">--</span></div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:1;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Vibration Trend</div>
+      <svg class="chart-blank" viewBox="0 0 220 90" preserveAspectRatio="none" id="trendChart">
+        <g stroke="rgba(255,255,255,0.08)" stroke-width="1">
+          <line x1="0" y1="10" x2="220" y2="10"/><line x1="0" y1="30" x2="220" y2="30"/>
+          <line x1="0" y1="50" x2="220" y2="50"/><line x1="0" y1="70" x2="220" y2="70"/>
+        </g>
+        <line x1="20" y1="0" x2="20" y2="90" stroke="rgba(255,255,255,0.14)"/>
+        <line x1="20" y1="82" x2="220" y2="82" stroke="rgba(255,255,255,0.14)"/>
+        <polyline id="trendLine" fill="none" stroke="var(--green-solid)" stroke-width="1.2" opacity="0.7"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- BOTTOM ROW -->
+  <div id="bottom">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Thermal Map</div>
+      <div class="bar-blank" id="thermalBars"></div>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Airflow</div>
+      <svg width="100%" height="60" viewBox="0 0 220 60" preserveAspectRatio="none">
+        <polyline id="airflowWave" fill="none" stroke="var(--ink-faint)" stroke-width="1"/>
+      </svg>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Structural</div>
+      <svg width="100%" height="60" viewBox="0 0 120 120" id="radarChart">
+        <g fill="none" stroke="rgba(255,255,255,0.1)"><circle cx="60" cy="60" r="46"/><circle cx="60" cy="60" r="30"/><circle cx="60" cy="60" r="14"/></g>
+        <polygon id="radarPoly" fill="rgba(80,255,120,0.12)" stroke="var(--green-solid)" stroke-width="1" opacity="0.6"/>
+      </svg>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">System Log<span class="dot"></span></div>
+      <div class="log-table" id="sysLog" style="font-size:9px;"></div>
+    </div>
+  </div>
+
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ============================================================
+   FILLER / PLACEHOLDER HUD DATA
+   ============================================================ */
+(function fillDecor(){
+  const logRows = document.getElementById('cycleLog');
+  for(let i=0;i<11;i++){
+    const id = 'A' + (100+i*7).toString(16).toUpperCase();
+    const flagged = i===3 || i===7;
+    const row = document.createElement('div');
+    row.className = 'row' + (flagged ? ' flag' : '');
+    row.innerHTML = `<span>${id}-${(90+i).toString().padStart(2,'0')}</span><span>--.--</span>`;
+    logRows.appendChild(row);
+  }
+  const sys = document.getElementById('sysLog');
+  const msgs = ['LINK SYNC OK','TELEMETRY IDLE','AWAITING FEED','NODE 04 STANDBY','CACHE CLEAR','PORT 7421 OPEN','NO ANOMALY'];
+  msgs.forEach(m=>{
+    const row = document.createElement('div'); row.className='row';
+    row.innerHTML = `<span>${m}</span><span>--:--</span>`;
+    sys.appendChild(row);
+  });
+  const bars = document.getElementById('thermalBars');
+  for(let i=0;i<24;i++){
+    const b=document.createElement('i');
+    b.style.height = (8+ (i%5)*4)+'%';
+    b.style.background = 'linear-gradient(to top, rgba(255,255,255,0.05), rgba(255,255,255,0.16))';
+    bars.appendChild(b);
+  }
+
+  let pts=[]; for(let x=0;x<=220;x+=11){ pts.push(x+','+(45+Math.sin(x*0.09)*4)); }
+  document.getElementById('airflowWave').setAttribute('points', pts.join(' '));
+  let tpts=[]; for(let x=0;x<=220;x+=14){ tpts.push(x+','+(82-Math.abs(Math.sin(x*0.05))*6)); }
+  document.getElementById('trendLine').setAttribute('points', tpts.join(' '));
+
+  // Radar chart initial
+  updateRadar([38,35,40,42,36]);
+})();
+
+function updateRadar(values){
+  const cx=60, cy=60, maxR=42;
+  const pts = values.map((v,i)=>{
+    const a = (i/values.length)*Math.PI*2 - Math.PI/2;
+    const r = (v/100)*maxR;
+    return `${cx+Math.cos(a)*r},${cy+Math.sin(a)*r}`;
+  });
+  document.getElementById('radarPoly').setAttribute('points', pts.join(' '));
+}
+
+/* ============================================================
+   SYNTHETIC METRICS ENGINE
+   ============================================================ */
+const metricState = {
+  n1: { base: 92.4, range: 3, decimals: 1 },
+  n2: { base: 88.1, range: 2.5, decimals: 1 },
+  egt: { base: 648, range: 30, decimals: 0 },
+  thrust: { base: 124.6, range: 8, decimals: 1 },
+  fuel: { base: 2840, range: 120, decimals: 0 },
+  oil: { base: 52, range: 4, decimals: 0 }
+};
+
+const stageMetrics = {
+  fan: {
+    n1: { base: 95.2, range: 2 }, n2: { base: 84.3, range: 3 },
+    egt: { base: 42, range: 8 }, thrust: { base: 134.2, range: 5 },
+    fuel: { base: 2650, range: 80 }, oil: { base: 48, range: 3 }
+  },
+  compressor: {
+    n1: { base: 91.8, range: 1.5 }, n2: { base: 93.6, range: 2 },
+    egt: { base: 385, range: 25 }, thrust: { base: 118.4, range: 6 },
+    fuel: { base: 2920, range: 100 }, oil: { base: 55, range: 4 }
+  },
+  combustor: {
+    n1: { base: 88.5, range: 3 }, n2: { base: 86.2, range: 2.8 },
+    egt: { base: 1420, range: 60 }, thrust: { base: 142.8, range: 10 },
+    fuel: { base: 3450, range: 150 }, oil: { base: 58, range: 5 }
+  },
+  turbine: {
+    n1: { base: 90.1, range: 2 }, n2: { base: 89.7, range: 2 },
+    egt: { base: 980, range: 40 }, thrust: { base: 128.5, range: 7 },
+    fuel: { base: 2780, range: 90 }, oil: { base: 50, range: 3 }
+  }
+};
+
+let currentMetrics = { ...metricState };
+let healthDegradation = false;
+let degradationStage = null;
+let degradationLevel = 0; // 0=none, 1=yellow, 2=red
+let degradationTimer = 0;
+
+function getMetricValue(key, metrics){
+  const m = metrics[key] || metricState[key];
+  const jitter = (Math.random() - 0.5) * 2 * m.range;
+  let val = m.base + jitter;
+  if(healthDegradation && degradationStage){
+    if(key === 'egt') val += degradationLevel * 45;
+    if(key === 'oil') val -= degradationLevel * 8;
+    if(key === 'n1') val -= degradationLevel * 3;
+    if(key === 'thrust') val -= degradationLevel * 12;
+  }
+  return val.toFixed(m.decimals !== undefined ? m.decimals : metricState[key].decimals);
+}
+
+function updateMetricsDisplay(){
+  const metrics = activeStage ? stageMetrics[activeStage] : metricState;
+  const keys = ['n1','n2','egt','thrust','fuel','oil'];
+  const ids = ['m-n1','m-n2','m-egt','m-thrust','m-fuel','m-oil'];
+
+  keys.forEach((key,i)=>{
+    const el = document.getElementById(ids[i]);
+    const val = getMetricValue(key, metrics);
+    el.querySelector('.mv').textContent = val;
+
+    // Health alert styling
+    el.classList.remove('alert-yellow','alert-red');
+    if(healthDegradation && degradationLevel > 0){
+      if(key === 'egt' || key === 'oil'){
+        el.classList.add(degradationLevel >= 2 ? 'alert-red' : 'alert-yellow');
+      }
+    }
+  });
+
+  // Update throttle display
+  const thrVal = (72 + (Math.random()-0.5)*4 - (healthDegradation ? degradationLevel*8 : 0)).toFixed(0);
+  document.getElementById('thrVal').textContent = `THR ${thrVal}%`;
+}
+
+setInterval(updateMetricsDisplay, 800);
+
+// Vibration trend update
+let trendData = [];
+for(let i=0;i<16;i++) trendData.push(50 + Math.random()*20);
+
+setInterval(()=>{
+  trendData.shift();
+  let newVal = 50 + Math.random()*20;
+  if(healthDegradation && degradationLevel > 0) newVal += degradationLevel * 12 + Math.random()*8;
+  trendData.push(newVal);
+  const pts = trendData.map((v,i)=>`${20 + i*12.5},${82 - (v/100)*70}`);
+  document.getElementById('trendLine').setAttribute('points', pts.join(' '));
+  document.getElementById('trendLine').setAttribute('stroke',
+    healthDegradation && degradationLevel >= 2 ? 'var(--red)' :
+    healthDegradation && degradationLevel >= 1 ? 'var(--yellow)' : 'var(--green-solid)');
+}, 600);
+
+// Thermal bars update
+setInterval(()=>{
+  const bars = document.querySelectorAll('#thermalBars i');
+  bars.forEach((b,i)=>{
+    let h = 8 + (i%5)*4 + Math.random()*15;
+    if(healthDegradation && degradationLevel > 0){
+      // Make some bars hot
+      if(i >= 10 && i <= 16) h += degradationLevel * 12;
+    }
+    b.style.height = h + '%';
+    if(healthDegradation && degradationLevel >= 2 && i >= 10 && i <= 16){
+      b.style.background = 'linear-gradient(to top, rgba(255,59,59,0.3), rgba(255,59,59,0.7))';
+    } else if(healthDegradation && degradationLevel >= 1 && i >= 10 && i <= 16){
+      b.style.background = 'linear-gradient(to top, rgba(255,204,0,0.2), rgba(255,204,0,0.5))';
+    } else {
+      b.style.background = 'linear-gradient(to top, rgba(255,255,255,0.05), rgba(255,255,255,0.16))';
+    }
+  });
+}, 700);
+
+// Airflow wave update
+setInterval(()=>{
+  const t = Date.now() * 0.001;
+  let pts=[];
+  for(let x=0;x<=220;x+=6){
+    let y = 30 + Math.sin(x*0.04 + t*2)*12 + Math.sin(x*0.08 + t*3)*4;
+    if(healthDegradation && degradationLevel > 0){
+      y += Math.sin(x*0.15 + t*5) * degradationLevel * 4;
+    }
+    pts.push(`${x},${y}`);
+  }
+  document.getElementById('airflowWave').setAttribute('points', pts.join(' '));
+  document.getElementById('airflowWave').setAttribute('stroke',
+    healthDegradation && degradationLevel >= 2 ? 'var(--red)' :
+    healthDegradation && degradationLevel >= 1 ? 'var(--yellow)' : 'var(--ink-faint)');
+}, 100);
+
+// Radar chart update
+setInterval(()=>{
+  const vals = [
+    38 + Math.random()*10 - (healthDegradation ? degradationLevel*8 : 0),
+    35 + Math.random()*12,
+    40 + Math.random()*8 - (healthDegradation ? degradationLevel*6 : 0),
+    42 + Math.random()*10,
+    36 + Math.random()*8
+  ].map(v=>Math.max(5,Math.min(95,v)));
+  updateRadar(vals);
+  const poly = document.getElementById('radarPoly');
+  poly.setAttribute('fill',
+    healthDegradation && degradationLevel >= 2 ? 'rgba(255,59,59,0.15)' :
+    healthDegradation && degradationLevel >= 1 ? 'rgba(255,204,0,0.12)' : 'rgba(80,255,120,0.12)');
+  poly.setAttribute('stroke',
+    healthDegradation && degradationLevel >= 2 ? 'var(--red)' :
+    healthDegradation && degradationLevel >= 1 ? 'var(--yellow)' : 'var(--green-solid)');
+}, 900);
+
+// System log live update
+const sysLogMsgs = [
+  'TELEMETRY OK', 'SYNC PULSE', 'BUFFER CLEAR', 'NODE 04 ACTIVE',
+  'CACHE REFRESH', 'DATA VALIDATED', 'THERMAL SCAN', 'VIB CHECK OK',
+  'OIL PRESS NOMINAL', 'FUEL FLOW STABLE', 'EGT WITHIN LIMITS',
+  'BEARING TEMP OK', 'SEAL INTEGRITY OK', 'BLADE TIP CLR OK'
+];
+const healthLogMsgs = [
+  '⚠ EGT RISING', '⚠ VIB ANOMALY', '⚠ OIL PRESS LOW',
+  '⚠ BEARING HEAT', '⚠ BLADE STRESS', '⚠ SEAL DEGRADED',
+  '⚠ THERMAL EXCEEDANCE', '⚠ STRUCTURAL ALERT'
+];
+setInterval(()=>{
+  const sysLog = document.getElementById('sysLog');
+  const now = new Date();
+  const ts = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+  const msgs = healthDegradation && degradationLevel > 0 ? healthLogMsgs : sysLogMsgs;
+  const msg = msgs[Math.floor(Math.random()*msgs.length)];
+  const row = document.createElement('div');
+  row.className = 'row' + (healthDegradation && degradationLevel > 0 ? ' flag' : '');
+  row.innerHTML = `<span>${msg}</span><span>${ts}</span>`;
+  sysLog.insertBefore(row, sysLog.firstChild);
+  if(sysLog.children.length > 8) sysLog.removeChild(sysLog.lastChild);
+}, 1500);
+
+
+/* ============================================================
+   HEALTH DETERIORATION TOGGLE
+   ============================================================ */
+const healthToggle = document.getElementById('healthToggle');
+const healthLabel = document.getElementById('healthLabel');
+const stageNames = ['fan','compressor','combustor','turbine'];
+
+healthToggle.addEventListener('click', ()=>{
+  healthDegradation = !healthDegradation;
+  healthToggle.classList.toggle('on', healthDegradation);
+  healthLabel.classList.toggle('on', healthDegradation);
+
+  if(healthDegradation){
+    healthLabel.textContent = 'DEGRADATION SIM';
+    degradationStage = stageNames[Math.floor(Math.random()*stageNames.length)];
+    degradationLevel = 0;
+    degradationTimer = 0;
+    document.getElementById('healthStatus').textContent = 'HEALTH: MONITORING...';
+    document.getElementById('healthStatus').style.color = 'var(--yellow)';
+  } else {
+    healthLabel.textContent = 'DEGRADATION OFF';
+    degradationStage = null;
+    degradationLevel = 0;
+    document.getElementById('healthStatus').textContent = 'HEALTH: NOMINAL';
+    document.getElementById('healthStatus').style.color = '';
+    // Reset health dots
+    document.querySelectorAll('.health-dot').forEach(d=>{ d.className='health-dot'; });
+    // Reset alert triangle
+    document.getElementById('alertTriangle').setAttribute('stroke', 'var(--ink)');
+    // Reset 3D highlight
+    resetHealthHighlight();
+  }
+});
+
+// Health degradation progression
+setInterval(()=>{
+  if(!healthDegradation) return;
+  degradationTimer++;
+  if(degradationTimer >= 3 && degradationLevel < 1){
+    degradationLevel = 1;
+    document.getElementById('hDot1').className = 'health-dot yellow';
+    document.getElementById('healthStatus').textContent = `HEALTH: CAUTION — ${degradationStage.toUpperCase()}`;
+    document.getElementById('healthStatus').style.color = 'var(--yellow)';
+    document.getElementById('alertTriangle').setAttribute('stroke', 'var(--yellow)');
+    applyHealthHighlight(degradationStage, 'yellow');
+  }
+  if(degradationTimer >= 8 && degradationLevel < 2){
+    degradationLevel = 2;
+    document.getElementById('hDot2').className = 'health-dot red';
+    document.getElementById('hDot3').className = 'health-dot red';
+    document.getElementById('healthStatus').textContent = `HEALTH: WARNING — ${degradationStage.toUpperCase()}`;
+    document.getElementById('healthStatus').style.color = 'var(--red)';
+    document.getElementById('alertTriangle').setAttribute('stroke', 'var(--red)');
+    applyHealthHighlight(degradationStage, 'red');
+  }
+}, 1200);
+
+
+/* ============================================================
+   THREE.JS — DUAL ENGINE SYSTEM
+   ============================================================ */
+const STAGE_COLOR_GREEN = 0x50ff78;
+const GREEN_EMISSIVE = 0x40cc60;
+const NEUTRAL = 0xcfd6dc;
+const NEUTRAL_DIM = 0x50565c;
+const HEALTH_YELLOW = 0xffcc00;
+const HEALTH_RED = 0xff3b3b;
+
+let scene, camera, renderer, canvas, controls;
+let proceduralGroup;
+let shaftSpin;
+let stages = { fan:[], compressor:[], combustor:[], turbine:[] };
+let activeStage = null;
+
+// Defer 3D init until DOM layout is fully computed
+requestAnimationFrame(()=>{
+  try {
+    initScene();
+    buildProceduralEngine();
+    animate();
+    console.log('[JET] 3D engine initialized successfully');
+  } catch(err) {
+    console.error('[JET] 3D init failed:', err);
+  }
+});
+
+function initScene(){
+  canvas = document.getElementById('engine-canvas');
+  const container = document.getElementById('viewport-frame');
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000);
+  camera.position.set(8, 4, 10);
+  renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+  // Initial sizing — use container rect to guarantee non-zero dimensions
+  const rect = container.getBoundingClientRect();
+  const w = Math.max(rect.width, 300);
+  const h = Math.max(rect.height, 200);
+  renderer.setSize(w, h, false);
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  console.log(`[JET] Initial canvas size: ${w}x${h}`);
+
+  // Robust resize via ResizeObserver
+  if(window.ResizeObserver){
+    new ResizeObserver(()=>resize()).observe(container);
+  }
+  window.addEventListener('resize', resize);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const key = new THREE.DirectionalLight(0xffffff, 1.0); key.position.set(6,9,8); scene.add(key);
+  const rim = new THREE.DirectionalLight(0x88aaff, 0.5); rim.position.set(-8,-4,-6); scene.add(rim);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.3); fill.position.set(0,-6,4); scene.add(fill);
+
+  controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.autoRotate = true;
+  controls.autoRotateSpeed = 0.8;
+  controls.minDistance = 5;
+  controls.maxDistance = 30;
+  controls.target.set(-1, 0, 0);
+  controls.update();
+
+  canvas.addEventListener('pointerdown', ()=>{ controls.autoRotate = false; canvas.classList.add('dragging'); });
+  canvas.addEventListener('pointerup', ()=>{
+    canvas.classList.remove('dragging');
+    setTimeout(()=>{ controls.autoRotate = true; }, 2500);
+  });
+
+  proceduralGroup = new THREE.Group();
+  scene.add(proceduralGroup);
+  shaftSpin = new THREE.Group();
+  proceduralGroup.add(shaftSpin);
+
+
+}
+
+function resize(){
+  const container = document.getElementById('viewport-frame');
+  const rect = container.getBoundingClientRect();
+  const w = Math.max(rect.width, 100);
+  const h = Math.max(rect.height, 100);
+  if(!renderer) return;
+  renderer.setSize(w, h, false);
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+/* ---- geometry helpers ---- */
+function bladeDiskMesh({x, hubR, bladeCount, bladeLen, bladeW, colorHex}){
+  const group = new THREE.Group();
+  group.position.x = x;
+
+  const hubGeo = new THREE.CylinderGeometry(hubR, hubR, 0.34, 20, 1, false);
+  hubGeo.rotateZ(Math.PI/2);
+  const hubMat = new THREE.MeshStandardMaterial({ color:0x8b9198, metalness:0.75, roughness:0.35 });
+  group.add(new THREE.Mesh(hubGeo, hubMat));
+
+  const bladeMat = new THREE.MeshStandardMaterial({
+    color:colorHex, metalness:0.4, roughness:0.45, emissive:0x010101, emissiveIntensity:0, side:THREE.DoubleSide
+  });
+  const meshes = [];
+  for(let i=0;i<bladeCount;i++){
+    const a = (i/bladeCount) * Math.PI*2;
+    const bGeo = new THREE.BoxGeometry(0.035, bladeLen, bladeW);
+    const mat = bladeMat.clone();
+    const pivot = new THREE.Group();
+    pivot.rotation.x = a;
+    const inner = new THREE.Mesh(bGeo, mat);
+    inner.position.y = hubR;
+    inner.rotation.z = 0.3;
+    pivot.add(inner);
+    group.add(pivot);
+    meshes.push(mat);
+  }
+  return { group, mats: meshes, hubMat };
+}
+
+function ringMesh(x, r1, r2, colorHex, opacity){
+  const geo = new THREE.RingGeometry(r1, r2, 40);
+  const mat = new THREE.MeshBasicMaterial({ color:colorHex, transparent:true, opacity:opacity, side:THREE.DoubleSide });
+  const m = new THREE.Mesh(geo, mat);
+  m.rotation.y = Math.PI/2;
+  m.position.x = x;
+  return { mesh:m, mat };
+}
+
+function buildProceduralEngine(){
+  // ---- central shaft ----
+  const shaftGeo = new THREE.CylinderGeometry(0.16, 0.16, 8.6, 16);
+  shaftGeo.rotateZ(Math.PI/2);
+  const shaftMat = new THREE.MeshStandardMaterial({ color:0x555b61, metalness:0.7, roughness:0.4 });
+  const shaft = new THREE.Mesh(shaftGeo, shaftMat);
+  shaft.position.x = -0.7;
+  shaftSpin.add(shaft);
+
+  // ---- spinner nose cone ----
+  const noseGeo = new THREE.ConeGeometry(0.42, 0.9, 20);
+  noseGeo.rotateZ(-Math.PI/2);
+  const noseMat = new THREE.MeshStandardMaterial({ color:0x9aa0a6, metalness:0.6, roughness:0.35 });
+  const nose = new THREE.Mesh(noseGeo, noseMat);
+  nose.position.x = -5.0;
+  shaftSpin.add(nose);
+
+  // ---- FAN ----
+  const fan = bladeDiskMesh({ x:-4.45, hubR:0.42, bladeCount:20, bladeLen:1.55, bladeW:0.62, colorHex:NEUTRAL });
+  shaftSpin.add(fan.group);
+  stages.fan.push(...fan.mats, fan.hubMat);
+
+  // ---- COMPRESSOR ----
+  const comp1 = bladeDiskMesh({ x:-3.15, hubR:0.44, bladeCount:26, bladeLen:1.02, bladeW:0.34, colorHex:NEUTRAL });
+  const comp2 = bladeDiskMesh({ x:-2.45, hubR:0.46, bladeCount:30, bladeLen:0.84, bladeW:0.28, colorHex:NEUTRAL });
+  const comp3 = bladeDiskMesh({ x:-1.85, hubR:0.47, bladeCount:32, bladeLen:0.66, bladeW:0.24, colorHex:NEUTRAL });
+  [comp1,comp2,comp3].forEach(c=>{ shaftSpin.add(c.group); stages.compressor.push(...c.mats, c.hubMat); });
+
+  // ---- COMBUSTOR ----
+  const combGroup = new THREE.Group();
+  combGroup.position.x = -1.05;
+  const combGeo = new THREE.CylinderGeometry(0.58, 0.5, 1.05, 24, 1, true);
+  combGeo.rotateZ(Math.PI/2);
+  const combMat = new THREE.MeshStandardMaterial({
+    color:0x707680, metalness:0.3, roughness:0.6, transparent:true, opacity:0.55,
+    side:THREE.DoubleSide, emissive:0x010101, emissiveIntensity:0
+  });
+  const combMesh = new THREE.Mesh(combGeo, combMat);
+  combGroup.add(combMesh);
+  const glowRings = [];
+  for(let i=0;i<3;i++){
+    const rg = ringMesh(-0.32 + i*0.32, 0.1, 0.5, NEUTRAL, 0.0);
+    combGroup.add(rg.mesh);
+    glowRings.push(rg.mat);
+  }
+  proceduralGroup.add(combGroup);
+  stages.combustor.push(combMat, ...glowRings);
+
+  // ---- TURBINE ----
+  const turb1 = bladeDiskMesh({ x:-0.15, hubR:0.42, bladeCount:24, bladeLen:0.6, bladeW:0.3, colorHex:NEUTRAL });
+  const turb2 = bladeDiskMesh({ x:0.42, hubR:0.4, bladeCount:22, bladeLen:0.72, bladeW:0.32, colorHex:NEUTRAL });
+  [turb1,turb2].forEach(t=>{ shaftSpin.add(t.group); stages.turbine.push(...t.mats, t.hubMat); });
+
+  // ---- exhaust nozzle ----
+  const nozGeo = new THREE.CylinderGeometry(0.55, 0.32, 1.4, 20, 1, true);
+  nozGeo.rotateZ(Math.PI/2);
+  const nozMat = new THREE.MeshStandardMaterial({ color:0x74797f, metalness:0.55, roughness:0.4, transparent:true, opacity:0.6, side:THREE.DoubleSide });
+  const nozzle = new THREE.Mesh(nozGeo, nozMat);
+  nozzle.position.x = 1.55;
+  proceduralGroup.add(nozzle);
+
+  // ---- outer nacelle (realistic jet engine profile) ----
+  // Y values are negated so after rotateZ(PI/2) the wide intake faces the fan (negative X)
+  // and the narrow nozzle faces the exhaust (positive X)
+  const nacelleProfile = [
+    // Nozzle end (rear, exhaust side → positive X after rotation)
+    new THREE.Vector2(0.38, -2.50),
+    new THREE.Vector2(0.45, -2.40),
+    new THREE.Vector2(0.58, -2.25),
+    // Exhaust section taper
+    new THREE.Vector2(0.72, -2.05),
+    new THREE.Vector2(0.88, -1.80),
+    new THREE.Vector2(1.05, -1.50),
+    new THREE.Vector2(1.22, -1.20),
+    // Core cowl widening toward front
+    new THREE.Vector2(1.38, -0.80),
+    new THREE.Vector2(1.50, -0.40),
+    new THREE.Vector2(1.62,  0.00),
+    new THREE.Vector2(1.72,  0.50),
+    // Mid-section (expanding)
+    new THREE.Vector2(1.80,  1.00),
+    new THREE.Vector2(1.86,  1.50),
+    new THREE.Vector2(1.90,  2.00),
+    new THREE.Vector2(1.94,  2.50),
+    new THREE.Vector2(1.98,  3.00),
+    // Forward cowl (widest point)
+    new THREE.Vector2(2.02,  3.40),
+    new THREE.Vector2(2.05,  3.80),
+    new THREE.Vector2(2.08,  4.20),
+    // Intake lip (front, fan side → negative X after rotation)
+    new THREE.Vector2(2.10,  4.55),
+    new THREE.Vector2(2.15,  4.80),
+    new THREE.Vector2(2.05,  5.00),
+    new THREE.Vector2(1.60,  5.20),
+  ];
+  const nacGeo = new THREE.LatheGeometry(nacelleProfile, 32);
+  nacGeo.rotateZ(Math.PI/2);
+  const nacMat = new THREE.MeshBasicMaterial({
+    color:0xaabbcc, wireframe:true, transparent:true, opacity:0.06
+  });
+  const nacelle = new THREE.Mesh(nacGeo, nacMat);
+  proceduralGroup.add(nacelle);
+
+  // ---- secondary inner cowl wireframe ----
+  const innerProfile = [
+    new THREE.Vector2(0.50, -0.90),
+    new THREE.Vector2(0.58, -0.40),
+    new THREE.Vector2(0.66,  0.20),
+    new THREE.Vector2(0.72,  0.80),
+    new THREE.Vector2(0.76,  1.40),
+    new THREE.Vector2(0.78,  2.00),
+    new THREE.Vector2(0.76,  2.60),
+    new THREE.Vector2(0.72,  3.20),
+    new THREE.Vector2(0.65,  3.60),
+  ];
+  const innerGeo = new THREE.LatheGeometry(innerProfile, 20);
+  innerGeo.rotateZ(Math.PI/2);
+  const innerMat = new THREE.MeshBasicMaterial({
+    color:0x8899aa, wireframe:true, transparent:true, opacity:0.04
+  });
+  const innerCowl = new THREE.Mesh(innerGeo, innerMat);
+  proceduralGroup.add(innerCowl);
+
+  // ---- axis guideline ----
+  const axisGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-6,0,0), new THREE.Vector3(4,0,0)]);
+  const axisMat = new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.06 });
+  proceduralGroup.add(new THREE.Line(axisGeo, axisMat));
+}
+
+/* ---- stage selection ---- */
+function setActiveStage(name, forceApply){
+  if(!forceApply) activeStage = (activeStage === name) ? null : name;
+
+  // Apply to procedural model
+  Object.keys(stages).forEach(key=>{
+    const isSelected = activeStage === key;
+    const isNone = activeStage === null;
+    const color = isNone ? NEUTRAL : (isSelected ? STAGE_COLOR_GREEN : NEUTRAL_DIM);
+    const emissive = isSelected ? GREEN_EMISSIVE : 0x010101;
+    const emissiveIntensity = isSelected ? 0.4 : 0;
+
+    stages[key].forEach(mat=>{
+      // If this material is currently under health degradation, we only update its backup
+      // so when degradation ends, it restores to the correct selection state.
+      if(mat._healthBackup) {
+        mat._healthBackup.color = color;
+        mat._healthBackup.emissive = emissive;
+        mat._healthBackup.emissiveIntensity = emissiveIntensity;
+      } else {
+        if(mat.color) mat.color.setHex(color);
+        if('emissive' in mat) { mat.emissive.setHex(emissive); mat.emissiveIntensity = emissiveIntensity; }
+      }
+      
+      if(mat.opacity !== undefined && mat.transparent){
+        if(key === 'combustor'){
+          mat.opacity = isSelected ? 0.85 : (isNone ? 0.55 : 0.2);
+        }
+      }
+    });
+  });
+
+
+
+  document.querySelectorAll('.stage-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.stage === activeStage);
+  });
+
+  const label = document.getElementById('stageLabel');
+  const details = {
+    fan:       { name:'FAN',        blades:'20',             temp:'15–45',     ratio:'1.5 : 1',  mat:'Ti-6Al-4V' },
+    compressor:{ name:'COMPRESSOR', blades:'26–32 / stage',  temp:'80–540',    ratio:'11 : 1',   mat:'Ni-Alloy' },
+    combustor: { name:'COMBUSTOR',  blades:'—',              temp:'1200–1800', ratio:'—',         mat:'Ceramic Liner' },
+    turbine:   { name:'TURBINE',    blades:'22–24 / stage',  temp:'900–1150',  ratio:'4.2 : 1',  mat:'Single-Crystal Ni' }
+  };
+  if(activeStage){
+    label.textContent = details[activeStage].name + ' — ACTIVE';
+    label.className = 'active';
+    const d = details[activeStage];
+    document.getElementById('stageDetail').innerHTML = `
+      <div class="drow"><span class="k">Selected</span><span class="v">${d.name}</span></div>
+      <div class="drow"><span class="k">Blade Count</span><span class="v">${d.blades}</span></div>
+      <div class="drow"><span class="k">Stage Temp</span><span class="v">${d.temp} °C</span></div>
+      <div class="drow"><span class="k">Pressure Ratio</span><span class="v">${d.ratio}</span></div>
+      <div class="drow"><span class="k">Material</span><span class="v">${d.mat}</span></div>`;
+  } else {
+    label.textContent = 'NONE SELECTED';
+    label.className = 'none';
+    document.getElementById('stageDetail').innerHTML = `
+      <div class="drow"><span class="k">Selected</span><span class="v">—</span></div>
+      <div class="drow"><span class="k">Blade Count</span><span class="v">--</span></div>
+      <div class="drow"><span class="k">Stage Temp</span><span class="v">-- °C</span></div>
+      <div class="drow"><span class="k">Pressure Ratio</span><span class="v">--</span></div>
+      <div class="drow"><span class="k">Material</span><span class="v">--</span></div>`;
+  }
+}
+
+document.getElementById('stageSelect').addEventListener('click', (e)=>{
+  const btn = e.target.closest('.stage-btn');
+  if(btn) setActiveStage(btn.dataset.stage);
+});
+
+/* ---- Health highlighting for 3D models ---- */
+function applyHealthHighlight(stage, severity){
+  const hex = severity === 'red' ? HEALTH_RED : HEALTH_YELLOW;
+  const emissiveHex = severity === 'red' ? 0xff2020 : 0xcc9900;
+
+  // Apply to procedural model
+  if(stage && stages[stage]){
+    stages[stage].forEach(mat => {
+      if(!mat._healthBackup){
+        mat._healthBackup = {
+          color: mat.color ? mat.color.getHex() : null,
+          emissive: mat.emissive ? mat.emissive.getHex() : null,
+          emissiveIntensity: mat.emissiveIntensity
+        };
+      }
+      if(mat.color) mat.color.setHex(hex);
+      if(mat.emissive){ mat.emissive.setHex(emissiveHex); mat.emissiveIntensity = severity === 'red' ? 0.7 : 0.4; }
+    });
+  }
+
+}
+
+function resetHealthHighlight(){
+  // Reset procedural
+  Object.keys(stages).forEach(key => {
+    stages[key].forEach(mat => {
+      if(mat._healthBackup){
+        if(mat.color && mat._healthBackup.color !== null) mat.color.setHex(mat._healthBackup.color);
+        if(mat.emissive && mat._healthBackup.emissive !== null) mat.emissive.setHex(mat._healthBackup.emissive);
+        mat.emissiveIntensity = mat._healthBackup.emissiveIntensity || 0;
+        delete mat._healthBackup;
+      }
+    });
+  });
+  // Re-apply current stage selection
+  if(activeStage) setActiveStage(activeStage, true);
+  else setActiveStage(null, true);
+
+}
+
+/* ---- animation loop ---- */
+const clock = new THREE.Clock();
+let healthPulseTime = 0;
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+
+  controls.update();
+
+  // Shaft spinning (engine running)
+  shaftSpin.rotation.x += dt * 2.4;
+
+
+
+  // Health pulsing effect
+  if(healthDegradation && degradationLevel > 0 && degradationStage){
+    healthPulseTime += dt * 3;
+    const pulse = 0.3 + Math.sin(healthPulseTime) * 0.3;
+    const hex = degradationLevel >= 2 ? HEALTH_RED : HEALTH_YELLOW;
+    const emissiveHex = degradationLevel >= 2 ? 0xff2020 : 0xcc9900;
+
+    if(stages[degradationStage]){
+      stages[degradationStage].forEach(mat => {
+        if(mat.emissive){
+          mat.emissiveIntensity = pulse;
+        }
+      });
+    }
+
+  }
+
+  renderer.render(scene, camera);
+}
+
+
+
+</script>
+</body>
+</html>
