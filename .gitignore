@@ -14,6 +14,7 @@ env/
 *.joblib
 models/
 checkpoints/
+src/model/artifacts/
 
 # Node / frontend
 node_modules/
