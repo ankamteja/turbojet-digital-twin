@@ -74,11 +74,11 @@ all times. So you train an apprentice by having them taste thousands of soups
 next to the chef's verdicts. Eventually the apprentice gives near-chef answers in
 a second. The apprentice is a *surrogate* for the chef.
 
-In this project the "apprentice" is a small **neural network** (explained in
-file 4). It is trained on a dataset where, for many engine states, we already
-know the true hidden health — the "chef's verdicts." After training it can look
-at brand-new sensor readings and estimate the health on its own, fast enough to
-power a live dashboard.
+In this project the "apprentice" is a small **machine-learning model** — an
+ensemble of decision trees (explained in file 4). It is trained on a dataset
+where, for many engine states, we already know the true hidden health — the
+"chef's verdicts." After training it can look at brand-new sensor readings and
+estimate the health on its own, fast enough to power a live dashboard.
 
 The README names this exactly: *"This project takes the surrogate-model
 approach: a computationally cheap, interpretable model that approximates engine
@@ -91,22 +91,22 @@ The whole surrogate lives in `src/model/`. Each file is one stage of the tour:
 
 | File | What it does | Covered in |
 |------|--------------|-----------|
-| `data.py` | Loads the data, prepares it, splits it | files 2–3 |
+| `data.py` | Loads the data, prepares it, attaches features | files 2–3 |
 | `physics.py` | Engine knowledge: features, physics rules, life estimates | files 2, 3, 5, 6 |
-| `net.py` | The neural network itself (the "apprentice") | file 4 |
-| `train.py` | Teaches the network from the data | file 5 |
-| `predict.py` | Uses the trained network on new readings; adds confidence + life estimate | file 6 |
-| `eval.py` | Grades how accurate the trained model is | file 6 |
+| `models.py` | The surrogate model itself (the "apprentice") | files 4–5 |
+| `train.py` | Teaches the model from the data | files 4–5 |
+| `predict.py` | Uses the trained model on new readings; adds confidence + life estimate | file 6 |
+| `eval.py` | Measures how accurate the trained model is | file 6 |
 
-The very top of `net.py` even calls the model by its role:
+The very top of `models.py` even names the model by its role:
 
 ```
-"""The surrogate model — a compact multi-head MLP.
+"""The surrogate model — a physics-constrained gradient-boosting ensemble.
 ```
-*(`src/model/net.py:1`)*
+*(`src/model/models.py:1`)*
 
-Don't worry about "multi-head" or "MLP" yet — file 4 unpacks them. For now, hold
-onto three ideas:
+Don't worry about "gradient-boosting ensemble" yet — file 4 unpacks it. For now,
+hold onto three ideas:
 
 - A **digital twin** mirrors a real engine from its sensors.
 - The engine's **health is hidden** and must be *inferred*, not read.

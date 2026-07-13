@@ -36,12 +36,12 @@ station scheme is documented right in the code header:
 Station numbering follows the gas path:
     2 = compressor inlet, 3 = compressor exit / combustor inlet, 4 = turbine inlet.
 ```
-*(`src/model/physics.py:13`)*
+*(`src/model/physics.py:21`)*
 
 ## The input sensors, column by column
 
 These are the measurements the model is *allowed to see*. They're listed in
-`physics.py` as `RAW_FEATURES` (`src/model/physics.py:44`). "Feature" is just the
+`physics.py` as `RAW_FEATURES` (`src/model/physics.py:49`). "Feature" is just the
 machine-learning word for "an input column."
 
 | Column | Plain meaning |
@@ -73,9 +73,9 @@ real jet, but it obeys real thermodynamics. It contains **10 engines × 30 cycle
 The data is split into files:
 
 - `train.csv` (240 rows) — used to teach the model.
-- `test.csv` (60 rows) — hidden from training, used only to grade the model later.
+- `test.csv` (60 rows) — hidden from training, used only to evaluate the model later.
 - `ground_truth.csv` (300 rows) — the *true* answers (health + performance) for
-  every row, used to teach and to grade.
+  every row, used to teach and to evaluate.
 
 `data.py` loads the sensor inputs and joins them to their true answers by
 matching on `EngineID` and `Cycle`:
@@ -83,12 +83,12 @@ matching on `EngineID` and `Cycle`:
 ```python
 merged = inputs.merge(truth[keep], on=["EngineID", "Cycle"], how="left")
 ```
-*(`src/model/data.py:65`)*
+*(`src/model/data.py:33`)*
 
 ## The six things we predict (the "targets")
 
 A **target** is a value the model is trying to output. There are six, listed as
-`TARGETS` in `physics.py:76`. They come in two groups.
+`TARGETS` in `physics.py:81`. They come in two groups.
 
 ### The four healths
 
@@ -96,7 +96,7 @@ A **target** is a value the model is trying to output. There are six, listed as
 HEALTH_TARGETS = TARGETS[:4]   # CompressorHealth, CombustorHealth,
                                # TurbineHealth, OverallHealth
 ```
-*(`src/model/physics.py:86`)*
+*(`src/model/physics.py:90`)*
 
 Each health is a number between **0 and 1**: `1.0` means "as good as new," and
 lower means "degraded." Three of them are per-subsystem (compressor, combustor,
@@ -110,7 +110,7 @@ we're watching engines *degrade gradually*, not catastrophically fail.
 ```python
 PERF_TARGETS = TARGETS[4:]     # Thrust_N, TSFC_g_N_s
 ```
-*(`src/model/physics.py:87`)*
+*(`src/model/physics.py:91`)*
 
 - **`Thrust_N`** — the forward push the engine produces, in Newtons (N). More
   thrust = more power. A degraded engine makes less thrust for the same effort.
@@ -151,24 +151,25 @@ TSFC_FROM_FUEL_THRUST = 1000.0
 ...
 def tsfc_from_fuel_thrust(fuel_flow_kg_s, thrust_n):
     """Closed-form TSFC [g/(N.s)] from fuel flow and thrust."""
-    return TSFC_FROM_FUEL_THRUST * fuel_flow_kg_s / thrust_n
+    thrust = np.maximum(np.asarray(thrust_n, dtype=float), 1.0)
+    return TSFC_FROM_FUEL_THRUST * np.asarray(fuel_flow_kg_s, dtype=float) / thrust
 ```
-*(`src/model/physics.py:31`, `physics.py:110`)*
+*(`src/model/physics.py:36`, `physics.py:123`)*
 
 In plain words: **fuel efficiency = fuel burned divided by push produced.** If
 you know how much fuel is going in (`FuelFlow`, a sensor we *do* have) and how
 much thrust comes out, you *automatically* know the fuel efficiency — it's just
 one divided by the other. The `1000` is only a unit conversion (kg → g) so the
 number lands in convenient grams. The comment notes this relation was *"Verified
-against the dataset to hold within ~1%"* (`physics.py:29`).
+against the dataset to hold within ~1%"* (`physics.py:34`).
 
 Why does this matter so much? Because it's a free, unbreakable fact about the
-engine that doesn't depend on any labels. Later (file 5) the model is *punished*
-whenever its predicted thrust and predicted TSFC disagree with this equation.
-That keeps the two predictions honest with each other and with the fuel the
-engine is actually burning. It's a first taste of what "physics-informed" means:
-we don't just fit numbers, we make the model respect relationships that physics
-guarantees.
+engine that doesn't depend on any labels. Later (file 5) the model doesn't even
+*try* to predict TSFC independently — it predicts thrust and then *derives* TSFC
+from this equation, so the two performance numbers can never disagree with each
+other or with the fuel the engine is actually burning. It's a first taste of what
+"physics-informed" means: we don't just fit numbers, we build the model so it
+respects relationships that physics guarantees.
 
 Next: **file 3**, on how these raw sensors get reshaped into more informative
 inputs before the model ever sees them.

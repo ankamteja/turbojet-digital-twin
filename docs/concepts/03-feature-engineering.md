@@ -23,7 +23,7 @@ the compressor *multiplies* the pressure (exit ÷ inlet) is a property of the
 compressor itself, and stays meaningful whether you're at sea level or 10 km up.
 
 `physics.py` builds eight of these derived columns in `add_physics_features`
-(`src/model/physics.py:90`):
+(`src/model/physics.py:98`):
 
 ```python
 df["PR_c"] = df["P3_Pa"] / df["P2_Pa"]          # compressor pressure ratio
@@ -43,7 +43,7 @@ ratio). The code comment captures the intuition:
 
 > *"a fouled compressor delivers a lower pressure ratio for the same corrected
 > speed, an eroded turbine changes the expansion across station 4, etc."*
-> — `physics.py:93`
+> — `physics.py:101`
 
 So each ratio is aimed at one subsystem's health:
 
@@ -64,7 +64,7 @@ days at different altitudes become directly comparable. The comment says it
 plainly:
 
 > *"Corrected speed/fuel remove the dependence on inlet conditions so the model
-> compares like with like."* — `physics.py:93`
+> compares like with like."* — `physics.py:104`
 
 You don't need the exact formulas. The point: these transformations let a
 degradation show up as a *clean drift* in the feature, instead of being buried
@@ -78,9 +78,9 @@ stitched together in order:
 ```python
 MODEL_FEATURES = RAW_FEATURES + DERIVED_FEATURES
 ```
-*(`src/model/physics.py:73`)*
+*(`src/model/physics.py:78`)*
 
-That's 13 raw + 8 derived = 21 columns the network reads.
+That's 13 raw + 8 derived = 21 columns the surrogate model reads.
 
 ## Why `EngineID` is dropped: leakage
 
@@ -93,7 +93,7 @@ in the comment:
 # Raw sensor columns fed to the model (EngineID is dropped — it is an identity
 # label, not a physical signal, and keeping it would let the model memorise).
 ```
-*(`src/model/physics.py:42`)*
+*(`src/model/physics.py:47`)*
 
 This guards against **data leakage**: when a model accidentally learns a shortcut
 that won't exist in real use. `EngineID` is just a name tag ("engine #7"). If the
@@ -105,71 +105,30 @@ carries no physical meaning, we remove the temptation entirely.
 `Cycle` is *kept*, because unlike a name tag it is a genuine physical driver —
 more cycles really does mean more wear. `EngineID` survives only as a *grouping
 key* (to know which rows belong to the same engine, used later for per-engine
-degradation), never as a model input. You can see it carried along separately in
-`data.py` as `engine_train`/`engine_val` (`src/model/data.py:48`).
+degradation), never as a model input.
 
-## StandardScaler: putting features on the same footing
+## No feature scaling needed: trees are scale-invariant
 
 The 21 features live on wildly different numeric scales. `Pamb_Pa` might be
-~40,000 while `Mach` is ~0.14 and a ratio like `PR_c` is ~3. To a neural network,
-a raw value of 40,000 *looks* enormously more important than 0.14 — purely
-because of its size, not its meaning. That's a problem.
+~40,000 while `Mach` is ~0.14 and a ratio like `PR_c` is ~3. For some kinds of
+model that gap is a real problem — a raw value of 40,000 can *look* far more
+important than 0.14 purely because of its size, so those models need a rescaling
+step to put every feature on a common footing.
 
-**StandardScaler** (from the scikit-learn library) fixes this. For each column it
-computes the average and the typical spread, then rewrites every value as "how
-many spreads above or below average am I." After scaling, every feature is
-centered near 0 with a comparable range, so the model can weigh them on merit.
+The surrogate here is built from **decision trees** (file 4), and trees don't
+care about a feature's scale at all. A tree only ever asks yes/no threshold
+questions like "is `PR_c` below 3.0?" — and the *answer* is identical whether the
+numbers are large or small. So there is no scaler to fit, and `data.py` simply
+loads the CSVs, attaches the engineered features, and hands back ready-to-use
+arrays. Its own header says exactly this (`src/model/data.py:3`):
 
-Analogy: it's like grading five exams on a curve so a 92 in an easy class and a
-55 in a brutal one become comparable "how far from typical" scores.
+> *"Boosted trees are scale-invariant, so there is no scaler to fit — we just load
+> the CSVs, attach the engineered physics features, and hand back a frame plus
+> ready-to-use arrays."*
 
-In `data.py`:
-
-```python
-x_scaler = StandardScaler().fit(tr[MODEL_FEATURES].values)
-```
-*(`src/model/data.py:85`)*
-
-Thrust gets its *own* separate scaler because it's a huge number (tens of
-thousands of Newtons) and needs the same centering treatment before the model
-predicts it:
-
-```python
-thrust_scaler = StandardScaler().fit(tr[["Thrust_N"]].values)
-```
-*(`src/model/data.py:86`)*
-
-(Health targets are already 0–1, so they need no scaling; TSFC is small and left
-as-is — see the note at `data.py:96`.)
-
-## Why the scaler is fit on the *training* data only
-
-This is subtle but important. Notice both `.fit(...)` calls above use `tr` — the
-training rows only, not the validation or test rows. The comment in `data.py`
-spells out why:
-
-```python
-# Fit scalers on training rows only.
-```
-*(`src/model/data.py:84`)*
-
-"Fitting" the scaler means *measuring* each column's average and spread. If we
-measured those using the test data too, we'd be sneaking information about the
-test set into the model's preparation — another form of leakage. The test set is
-supposed to stand in for *future, unseen* engine data, and in the future you
-obviously can't peek at data you don't have yet.
-
-So the rule is: **learn the scaling recipe from training data only, then apply
-that same fixed recipe to everything else.** You can see the recipe being
-*applied* (not re-learned) to new data at prediction time:
-
-```python
-X = self.x_scaler.transform(feats[MODEL_FEATURES].values)
-```
-*(`src/model/predict.py:81`)*
-
-`.transform` uses the already-learned averages and spreads; it never re-measures.
-This keeps the evaluation honest.
+This is a small but real advantage of the tree-based surrogate: one fewer moving
+part, and one fewer place where information about the test set could accidentally
+leak into training through a scaler fit on the wrong rows.
 
 ## Recap
 
@@ -178,8 +137,7 @@ This keeps the evaluation honest.
 - Speed and fuel get **corrected** so different conditions are comparable.
 - `EngineID` is **dropped** to prevent the model from memorizing name tags
   (leakage); `Cycle` is kept because aging is real physics.
-- **StandardScaler** puts all features on a common scale, **fit on train only**
-  so no future information leaks in.
+- **No scaling is needed** — the tree-based surrogate is scale-invariant.
 
-Next: **file 4**, the neural network that finally consumes these 21 prepared
+Next: **file 4**, the surrogate model that finally consumes these 21 prepared
 features.
