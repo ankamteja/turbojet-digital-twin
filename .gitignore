@@ -30,3 +30,7 @@ build/
 .DS_Store
 .idea/
 .vscode/
+
+# Problem statement / internal planning (keep out of the public repo)
+*.pdf
+docs/coverage-report.md

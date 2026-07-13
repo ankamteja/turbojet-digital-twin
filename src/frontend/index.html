@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TF-9 // TURBOJET DIGITAL TWIN</title>
+<meta name="description" content="Turbojet digital twin dashboard — real model-driven health, performance and RUL telemetry over a procedural 3D engine.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+
+<!-- Teammate's CSS, extracted unchanged (plus a controls block at the end). -->
+<link rel="stylesheet" href="styles.css">
+
+<!-- Three.js + addons via importmap (same versions as the reference). -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div class="app">
+
+  <!-- TOP BAR -->
+  <div id="top">
+    <div class="brand">
+      <div class="mark"></div>
+      <h1>TF-9 <span>//</span> TURBOJET DIGITAL TWIN</h1>
+    </div>
+    <div class="status-chips">
+      <div class="chip on"><span class="led"></span>PWR</div>
+      <div class="chip on"><span class="led"></span>SIM ACTIVE</div>
+      <div class="chip"><span class="led"></span>AUTO-ALIGN</div>
+      <div class="chip warn" id="thrChip"><span class="led"></span><span id="thrVal">THR --%</span></div>
+      <div class="chip on"><span class="led"></span>SYS CHECK</div>
+      <div class="chip on"><span class="led"></span>SECURE LINK</div>
+    </div>
+  </div>
+
+  <!-- LEFT COLUMN -->
+  <div id="left" class="col">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">Stage Select<span class="dot"></span></div>
+      <div class="stage-select" id="stageSelect">
+        <button class="stage-btn" data-stage="fan"><span class="n">01</span><span class="swatch" style="color:var(--c-fan)"></span>FAN</button>
+        <button class="stage-btn" data-stage="compressor"><span class="n">02</span><span class="swatch" style="color:var(--c-compressor)"></span>COMPRESSOR</button>
+        <button class="stage-btn" data-stage="combustor"><span class="n">03</span><span class="swatch" style="color:var(--c-combustor)"></span>COMBUSTOR</button>
+        <button class="stage-btn" data-stage="turbine"><span class="n">04</span><span class="swatch" style="color:var(--c-turbine)"></span>TURBINE</button>
+      </div>
+    </div>
+
+    <!-- CONTROLS (new): engine selector, cycle scrubber, playback. -->
+    <div class="panel" style="flex:0 0 auto;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title"><span>Telemetry Feed</span><div class="health-indicator"><span class="health-dot" id="hDot1"></span><span class="health-dot" id="hDot2"></span><span class="health-dot" id="hDot3"></span></div></div>
+      <div class="controls">
+        <div class="control-row">
+          <label for="engineSelect">Engine</label>
+          <select id="engineSelect"></select>
+        </div>
+        <div class="control-row">
+          <label for="cycleSlider">Cycle</label>
+          <div class="slider-row">
+            <input type="range" id="cycleSlider" min="1" max="30" value="1" step="1">
+            <span id="cycleLabel">1 / 30</span>
+          </div>
+        </div>
+        <button id="playBtn">▶ PLAY</button>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:0 0 auto;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Alert Ring</div>
+      <div class="ring-wrap"><svg width="92" height="92" viewBox="0 0 92 92" id="alertRing">
+        <circle cx="46" cy="46" r="40" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+        <circle cx="46" cy="46" r="40" fill="none" stroke="var(--ink-dim)" stroke-width="1" stroke-dasharray="4 6"/>
+        <circle cx="46" cy="46" r="33" fill="none" stroke="rgba(255,255,255,0.14)" stroke-width="1"/>
+        <path d="M46 30 L58 54 L34 54 Z" fill="none" stroke="var(--ink)" stroke-width="1.4" stroke-linejoin="round" id="alertTriangle"/>
+        <text x="46" y="52" font-size="9" fill="var(--ink)" text-anchor="middle" font-family="JetBrains Mono">!</text>
+      </svg></div>
+    </div>
+
+    <div class="panel" style="flex:1;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Cycle Log</div>
+      <div class="log-table" id="cycleLog"></div>
+    </div>
+  </div>
+
+  <!-- CENTER VIEWPORT -->
+  <div id="center">
+    <div id="viewport-frame">
+      <canvas id="engine-canvas"></canvas>
+
+      <div class="viewport-hud">
+        <div class="vh-corner tl">SYS ID 3047<br><b>MODEL:</b> TF-9 TURBOJET</div>
+        <div class="vh-corner tr"><span id="orbVel">ORB-VEL 7.8KM/S</span><br><b>SIG</b> <span id="sigVal">--%</span></div>
+        <div class="vh-corner bl">STAGE &gt;&gt; <span id="stageLabel" class="none">NONE SELECTED</span></div>
+        <div class="vh-corner br"><span id="healthStatus">HEALTH: NOMINAL</span><br><b>LOC</b>-7129</div>
+        <div class="reticle"></div>
+        <div class="drag-hint">DRAG TO ROTATE &nbsp;·&nbsp; SCROLL TO ZOOM</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN -->
+  <div id="right" class="col">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">Performance<span class="dot"></span></div>
+      <div class="metric-grid" id="perfGrid">
+        <div class="metric" id="m-n1"><div class="lbl">N1 Speed</div><div class="val"><span class="mv">--</span> <small>%</small></div></div>
+        <div class="metric" id="m-n2"><div class="lbl">N2 Speed</div><div class="val"><span class="mv">--</span> <small>%</small></div></div>
+        <div class="metric" id="m-egt"><div class="lbl">EGT</div><div class="val"><span class="mv">--</span> <small>°C</small></div></div>
+        <div class="metric" id="m-thrust"><div class="lbl">Thrust</div><div class="val"><span class="mv">--</span> <small>kN</small></div></div>
+        <div class="metric" id="m-fuel"><div class="lbl">Fuel Flow</div><div class="val"><span class="mv">--</span> <small>kg/h</small></div></div>
+        <div class="metric" id="m-oil"><div class="lbl">Oil Press</div><div class="val"><span class="mv">--</span> <small>psi</small></div></div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:0 0 auto;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Stage Detail</div>
+      <div id="stageDetail">
+        <div class="drow"><span class="k">Selected</span><span class="v">—</span></div>
+        <div class="drow"><span class="k">Health</span><span class="v">-- %</span></div>
+        <div class="drow"><span class="k">Confidence</span><span class="v">-- %</span></div>
+        <div class="drow"><span class="k">RUL</span><span class="v">--</span></div>
+        <div class="drow"><span class="k">Action</span><span class="v">--</span></div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:1;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Health Trend</div>
+      <svg class="chart-blank" viewBox="0 0 220 90" preserveAspectRatio="none" id="trendChart">
+        <g stroke="rgba(255,255,255,0.08)" stroke-width="1">
+          <line x1="0" y1="10" x2="220" y2="10"/><line x1="0" y1="30" x2="220" y2="30"/>
+          <line x1="0" y1="50" x2="220" y2="50"/><line x1="0" y1="70" x2="220" y2="70"/>
+        </g>
+        <line x1="20" y1="0" x2="20" y2="90" stroke="rgba(255,255,255,0.14)"/>
+        <line x1="20" y1="82" x2="220" y2="82" stroke="rgba(255,255,255,0.14)"/>
+        <polyline id="trendLine" fill="none" stroke="var(--green-solid)" stroke-width="1.2" opacity="0.7"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- BOTTOM ROW -->
+  <div id="bottom">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Thermal Map</div>
+      <div class="bar-blank" id="thermalBars"></div>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Airflow</div>
+      <svg width="100%" height="60" viewBox="0 0 220 60" preserveAspectRatio="none">
+        <polyline id="airflowWave" fill="none" stroke="var(--ink-faint)" stroke-width="1"/>
+      </svg>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Structural</div>
+      <svg width="100%" height="60" viewBox="0 0 120 120" id="radarChart">
+        <g fill="none" stroke="rgba(255,255,255,0.1)"><circle cx="60" cy="60" r="46"/><circle cx="60" cy="60" r="30"/><circle cx="60" cy="60" r="14"/></g>
+        <polygon id="radarPoly" fill="rgba(80,255,120,0.12)" stroke="var(--green-solid)" stroke-width="1" opacity="0.6"/>
+      </svg>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">System Log<span class="dot"></span></div>
+      <div class="log-table" id="sysLog" style="font-size:9px;"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bootstrap: wires API + scene + dashboard + controls together. -->
+<script type="module" src="js/main.js"></script>
+
+<!-- Cosmetic ambient animations that have NO real data source. Kept from the
+     reference (airflow wave motion), and seeded once. The 3D shaft spin and
+     auto-rotate live in js/scene.js. -->
+<script>
+(function ambientAirflow(){
+  // Seed the thermal bar elements (heights are set from REAL temps by
+  // dashboard.js; here we only create the DOM once).
+  const bars = document.getElementById('thermalBars');
+  for (let i = 0; i < 24; i++) {
+    const b = document.createElement('i');
+    b.style.height = '8%';
+    b.style.background = 'linear-gradient(to top, rgba(255,255,255,0.05), rgba(255,255,255,0.16))';
+    bars.appendChild(b);
+  }
+  // Airflow wave is purely decorative (no telemetry counterpart) — animate it.
+  const wave = document.getElementById('airflowWave');
+  setInterval(() => {
+    const t = Date.now() * 0.001;
+    const pts = [];
+    for (let x = 0; x <= 220; x += 6) {
+      const y = 30 + Math.sin(x * 0.04 + t * 2) * 12 + Math.sin(x * 0.08 + t * 3) * 4;
+      pts.push(`${x},${y.toFixed(1)}`);
+    }
+    wave.setAttribute('points', pts.join(' '));
+  }, 100);
+})();
+</script>
+</body>
+</html>
