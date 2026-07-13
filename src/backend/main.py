@@ -5,6 +5,15 @@ Run:  uvicorn main:app --reload --port 8000   (from src/backend/)
 
 from __future__ import annotations
 
+# Cap the numerical thread pools BEFORE importing sklearn/joblib. The startup
+# precompute fires many small gradient-boosting predictions; without this the
+# OpenMP/BLAS pools oversubscribe the CPU and startup stalls at high load.
+import os
+
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+           "LOKY_MAX_CPU_COUNT"):
+    os.environ.setdefault(_v, "1")
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 

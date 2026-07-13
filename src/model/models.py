@@ -65,8 +65,12 @@ class SurrogateEnsemble:
         self.feature_names = list(MODEL_FEATURES)
 
     # ------------------------------------------------------------------ #
-    def fit(self, X, y: dict):
-        """X: (n, n_features) array. y: dict target -> (n,) array."""
+    def fit(self, X, y: dict, compute_importance=True):
+        """X: (n, n_features) array. y: dict target -> (n,) array.
+
+        `compute_importance=False` skips the (slow) permutation-importance pass —
+        used during cross-validation where importances aren't needed.
+        """
         X = np.asarray(X, dtype=float)
         rng = np.random.default_rng(0)
         n = len(X)
@@ -81,7 +85,8 @@ class SurrogateEnsemble:
             # confidence normaliser: spread of the target itself
             self.conf_scale[target] = float(np.std(y[target])) or 1.0
 
-        self._compute_importances(X, y)
+        if compute_importance:
+            self._compute_importances(X, y)
         return self
 
     # ------------------------------------------------------------------ #

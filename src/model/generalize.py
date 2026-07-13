@@ -35,7 +35,8 @@ def main():
         tr = full[full["EngineID"] != eid]
         te = full[full["EngineID"] == eid]
         X_tr, y_tr = xy(tr)
-        surrogate = SurrogateEnsemble(n_members=5).fit(X_tr, y_tr)  # lighter for CV
+        surrogate = SurrogateEnsemble(n_members=5).fit(
+            X_tr, y_tr, compute_importance=False)  # lighter for CV
 
         X_te = te[surrogate.feature_names].values.astype(float)
         pred = surrogate.predict(X_te, te["FuelFlow_kg_s"].values)
