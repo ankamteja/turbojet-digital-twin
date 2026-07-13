@@ -7,8 +7,15 @@ Two jobs:
    degrading component shows up as a drift in these ratios, so they are far more
    informative to the model than the raw numbers.
 
-2. Provide the physics-informed loss terms and the closed-form relations
-   (TSFC, RUL) that keep the model's predictions thermodynamically sensible.
+2. Provide the closed-form physical relations the surrogate is constrained by:
+   the TSFC ↔ thrust identity, the overall-health aggregation, monotonic
+   degradation, and the remaining-useful-life projection.
+
+The surrogate (models.py) enforces physics as *hard structural constraints*
+rather than soft training penalties:
+  * degradation monotonicity — gradient-boosting monotonic constraint on Cycle
+  * TSFC = 1000·fuel/thrust — TSFC is derived from predicted thrust, never a
+    free output, so the two performance numbers can never disagree.
 
 Station numbering follows the gas path:
     2 = compressor inlet, 3 = compressor exit / combustor inlet, 4 = turbine inlet.
@@ -17,17 +24,15 @@ Station numbering follows the gas path:
 from __future__ import annotations
 
 import numpy as np
-import torch
 
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
 
-# TSFC (thrust-specific fuel consumption) is fuel burned per unit thrust.
+# TSFC (thrust-specific fuel consumption) is fuel burned per unit thrust:
 #   TSFC [g/(N.s)] = 1000 * FuelFlow [kg/s] / Thrust [N]
-# Verified against the dataset to hold within ~1%. This ties the two
-# performance targets together and is used both as a feature-free check and as
-# a physics loss.
+# Verified against the dataset to hold within ~1%. It ties the two performance
+# targets together; we predict thrust and *derive* TSFC from it.
 TSFC_FROM_FUEL_THRUST = 1000.0
 
 # Default end-of-life threshold on OverallHealth. Below this the engine is
@@ -36,7 +41,7 @@ RUL_THRESHOLD = 0.80
 
 
 # --------------------------------------------------------------------------- #
-# Feature engineering (numpy / pandas world)
+# Feature engineering
 # --------------------------------------------------------------------------- #
 
 # Raw sensor columns fed to the model (EngineID is dropped — it is an identity
@@ -72,7 +77,7 @@ DERIVED_FEATURES = [
 # Full ordered feature list the model consumes.
 MODEL_FEATURES = RAW_FEATURES + DERIVED_FEATURES
 
-# Target columns the model predicts.
+# Target columns.
 TARGETS = [
     "CompressorHealth",
     "CombustorHealth",
@@ -82,9 +87,12 @@ TARGETS = [
     "TSFC_g_N_s",
 ]
 
-# Split of targets by head.
 HEALTH_TARGETS = TARGETS[:4]
 PERF_TARGETS = TARGETS[4:]
+
+# Targets the surrogate learns directly. TSFC is NOT here — it is derived from
+# predicted thrust via the physics identity, guaranteeing consistency.
+LEARNED_TARGETS = HEALTH_TARGETS + ["Thrust_N"]
 
 
 def add_physics_features(df):
@@ -107,87 +115,29 @@ def add_physics_features(df):
     return df
 
 
+# --------------------------------------------------------------------------- #
+# Physical relations
+# --------------------------------------------------------------------------- #
+
+
 def tsfc_from_fuel_thrust(fuel_flow_kg_s, thrust_n):
-    """Closed-form TSFC [g/(N.s)] from fuel flow and thrust."""
-    return TSFC_FROM_FUEL_THRUST * fuel_flow_kg_s / thrust_n
+    """Closed-form TSFC [g/(N.s)] from fuel flow and thrust.
 
-
-# --------------------------------------------------------------------------- #
-# Physics-informed loss terms (torch world)
-# --------------------------------------------------------------------------- #
-#
-# Each returns a scalar tensor. They are *soft* constraints added to the base
-# supervised MSE, weighted in train.py. They do not require ground-truth labels
-# — they encode relationships that must hold regardless of the labels, which is
-# what makes the model "physics-informed" rather than purely data-driven.
-
-
-def loss_tsfc_consistency(pred_thrust_n, pred_tsfc, fuel_flow_kg_s):
-    """Predicted TSFC must match 1000*fuel/thrust computed from predicted thrust.
-
-    Couples the two performance heads: the model cannot invent a thrust and a
-    TSFC that disagree with the fuel it was told the engine is burning.
-
-    The thrust head is an unbounded linear output, so early in training (or on
-    out-of-distribution inputs) it can dip to zero or negative. We clamp the
-    denominator to a small positive floor to keep the division — and therefore
-    the gradient — finite. Real in-distribution thrust is tens of thousands of N,
-    far above the floor, so the clamp never affects healthy predictions.
+    Thrust is floored to a small positive value so the division stays finite on
+    out-of-distribution inputs (real thrust is tens of thousands of N).
     """
-    thrust_safe = torch.clamp(pred_thrust_n, min=1.0)
-    implied = tsfc_from_fuel_thrust(fuel_flow_kg_s, thrust_safe)
-    return torch.mean((pred_tsfc - implied) ** 2)
+    thrust = np.maximum(np.asarray(thrust_n, dtype=float), 1.0)
+    return TSFC_FROM_FUEL_THRUST * np.asarray(fuel_flow_kg_s, dtype=float) / thrust
 
 
-def loss_overall_aggregation(pred_health):
-    """OverallHealth should track the aggregate of the three subsystem healths.
+def overall_aggregation_residual(comp, comb, turb, overall):
+    """How far predicted OverallHealth sits from the mean of the three parts.
 
-    `pred_health` columns are [compressor, combustor, turbine, overall].
-    We penalise the overall drifting away from the mean of the three parts. The
-    engine is only as healthy as its subsystems; this stops the overall index
-    floating free of them.
+    Reported as a physics-consistency metric — the engine should be about as
+    healthy as the aggregate of its subsystems.
     """
-    parts_mean = pred_health[:, :3].mean(dim=1)
-    overall = pred_health[:, 3]
-    return torch.mean((overall - parts_mean) ** 2)
-
-
-def loss_monotonic_degradation(pred_health, cycle, engine_id):
-    """Within one engine, health should not *increase* as cycles accumulate.
-
-    Degradation is one-directional (wear does not heal). For each engine we sort
-    by cycle and apply a hinge penalty on any positive step in predicted health.
-    Soft, so genuine measurement noise is tolerated.
-    """
-    device = pred_health.device
-    total = torch.zeros((), device=device)
-    count = 0
-    for eid in torch.unique(engine_id):
-        mask = engine_id == eid
-        if mask.sum() < 2:
-            continue
-        order = torch.argsort(cycle[mask])
-        h = pred_health[mask][order]           # (n_cycles, 4) sorted by cycle
-        deltas = h[1:] - h[:-1]                # step-to-step change
-        # penalise increases only (health going up over time)
-        total = total + torch.mean(torch.clamp(deltas, min=0.0) ** 2)
-        count += 1
-    return total / max(count, 1)
-
-
-def loss_ratio_health_coupling(pred_health, pr_c_norm):
-    """Weak guardrail: higher compressor health ~ higher (normalised) PR_c.
-
-    A healthy compressor achieves a higher pressure ratio for given conditions.
-    We encourage positive correlation between predicted compressor health and
-    the standardised PR_c feature by penalising their negative covariance. Kept
-    at a small weight — a guardrail on the sign, not a hard law.
-    """
-    comp = pred_health[:, 0]
-    comp_c = comp - comp.mean()
-    pr_c = pr_c_norm - pr_c_norm.mean()
-    cov = torch.mean(comp_c * pr_c)
-    return torch.clamp(-cov, min=0.0)
+    parts_mean = (np.asarray(comp) + np.asarray(comb) + np.asarray(turb)) / 3.0
+    return np.abs(np.asarray(overall) - parts_mean)
 
 
 # --------------------------------------------------------------------------- #
