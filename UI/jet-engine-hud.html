@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TF-9 // TURBOFAN X-RAY DIAGNOSTIC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{
+    --bg: #030405;
+    --panel-bg: rgba(8, 10, 12, 0.55);
+    --line: rgba(232, 236, 240, 0.16);
+    --line-strong: rgba(232, 236, 240, 0.4);
+    --ink: #e9edf1;
+    --ink-dim: #7d8791;
+    --ink-faint: #4a5158;
+    --red: #ff3b3b;
+    --c-fan: #4fd8ff;
+    --c-compressor: #ffb347;
+    --c-combustor: #ff4d4d;
+    --c-turbine: #b98bff;
+    --accent: var(--red);
+    --mono: 'JetBrains Mono', monospace;
+    --disp: 'Rajdhani', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:var(--mono); overflow:hidden;
+  }
+  body{
+    background-image:
+      radial-gradient(ellipse at 50% 0%, rgba(90,110,130,0.08), transparent 60%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.014) 0px, rgba(255,255,255,0.014) 1px, transparent 1px, transparent 3px);
+  }
+  .app{
+    display:grid;
+    grid-template-rows: 46px 1fr 150px;
+    grid-template-columns: 260px 1fr 260px;
+    grid-template-areas:
+      "top top top"
+      "left center right"
+      "bottom bottom bottom";
+    height:100vh; width:100vw; padding:10px; gap:10px;
+  }
+
+  /* ---------- shared panel chrome ---------- */
+  .panel{
+    position:relative; border:1px solid var(--line); background:var(--panel-bg);
+    padding:10px 12px 12px; display:flex; flex-direction:column; min-height:0;
+    backdrop-filter: blur(2px);
+  }
+  .panel::before, .panel::after,
+  .panel .corner-tl, .panel .corner-br{ content:''; }
+  .panel .corner{
+    position:absolute; width:9px; height:9px; border-color:var(--line-strong); pointer-events:none;
+  }
+  .panel .corner.tl{ top:-1px; left:-1px; border-top:1px solid; border-left:1px solid; }
+  .panel .corner.tr{ top:-1px; right:-1px; border-top:1px solid; border-right:1px solid; }
+  .panel .corner.bl{ bottom:-1px; left:-1px; border-bottom:1px solid; border-left:1px solid; }
+  .panel .corner.br{ bottom:-1px; right:-1px; border-bottom:1px solid; border-right:1px solid; }
+
+  .panel-title{
+    font-family:var(--disp); font-size:11px; font-weight:700; letter-spacing:.14em;
+    color:var(--ink-dim); text-transform:uppercase; margin:0 0 8px; padding-bottom:6px;
+    border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;
+  }
+  .panel-title .dot{ width:5px; height:5px; border-radius:50%; background:var(--ink-faint); }
+  .panel-title.live .dot{ background:var(--accent); box-shadow:0 0 6px var(--accent); animation: blink 2.2s infinite; }
+  @keyframes blink{ 0%,100%{opacity:1;} 50%{opacity:.25;} }
+
+  .col{ display:flex; flex-direction:column; gap:10px; min-height:0; }
+  #left{ grid-area:left; }
+  #right{ grid-area:right; }
+  #center{ grid-area:center; position:relative; min-height:0; }
+  #top{ grid-area:top; }
+  #bottom{ grid-area:bottom; display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; }
+
+  /* ---------- top bar ---------- */
+  #top{
+    display:flex; align-items:center; justify-content:space-between;
+    border:1px solid var(--line); padding:0 16px; background:var(--panel-bg);
+  }
+  .brand{ display:flex; align-items:center; gap:10px; }
+  .brand .mark{ width:16px; height:16px; border:1px solid var(--accent); position:relative; }
+  .brand .mark::after{ content:''; position:absolute; inset:3px; background:var(--accent); opacity:.6; }
+  .brand h1{
+    font-family:var(--disp); font-size:15px; font-weight:700; letter-spacing:.22em; margin:0;
+    color:var(--ink);
+  }
+  .brand h1 span{ color:var(--accent); }
+  .status-chips{ display:flex; gap:18px; align-items:center; }
+  .chip{ font-size:10px; letter-spacing:.08em; color:var(--ink-dim); display:flex; gap:6px; align-items:center; }
+  .chip .led{ width:6px; height:6px; border-radius:50%; background:#3a4046; }
+  .chip.on .led{ background:#5cff9d; box-shadow:0 0 6px #5cff9d; }
+  .chip.warn .led{ background:var(--accent); box-shadow:0 0 6px var(--accent); }
+
+  /* ---------- left column contents ---------- */
+  .stage-select{ display:flex; flex-direction:column; gap:6px; }
+  .stage-btn{
+    display:flex; align-items:center; gap:9px; background:transparent;
+    border:1px solid var(--line); color:var(--ink-dim); font-family:var(--mono);
+    font-size:11px; letter-spacing:.04em; padding:8px 9px; cursor:pointer; text-align:left;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  .stage-btn .swatch{ width:9px; height:9px; border:1px solid currentColor; flex:0 0 auto; }
+  .stage-btn .n{ color:var(--ink-faint); font-size:10px; width:14px; flex:0 0 auto; }
+  .stage-btn:hover{ border-color:var(--line-strong); color:var(--ink); }
+  .stage-btn.active{ color:var(--ink); background:rgba(255,255,255,0.04); }
+  .stage-btn.active .swatch{ box-shadow:0 0 6px currentColor; }
+  .stage-btn[data-stage="fan"].active{ border-color:var(--c-fan); color:var(--c-fan); }
+  .stage-btn[data-stage="compressor"].active{ border-color:var(--c-compressor); color:var(--c-compressor); }
+  .stage-btn[data-stage="combustor"].active{ border-color:var(--c-combustor); color:var(--c-combustor); }
+  .stage-btn[data-stage="turbine"].active{ border-color:var(--c-turbine); color:var(--c-turbine); }
+
+  .ring-wrap{ display:flex; align-items:center; justify-content:center; padding:6px 0 2px; }
+  .log-table{ font-size:9.5px; color:var(--ink-faint); line-height:1.7; overflow:hidden; flex:1; }
+  .log-table .row{ display:flex; justify-content:space-between; border-bottom:1px dashed rgba(255,255,255,0.06); padding:1px 0; }
+  .log-table .row span:first-child{ color:var(--ink-dim); }
+  .log-table .row.flag{ color:var(--red); }
+
+  /* ---------- center / viewport ---------- */
+  #viewport-frame{
+    position:absolute; inset:0; border:1px solid var(--line); overflow:hidden;
+    background: radial-gradient(ellipse at 50% 45%, rgba(60,75,90,0.14), rgba(0,0,0,0) 65%);
+  }
+  #engine-canvas{ width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  #engine-canvas.dragging{ cursor:grabbing; }
+  .viewport-hud{ position:absolute; inset:0; pointer-events:none; }
+  .vh-corner{ position:absolute; font-size:9.5px; color:var(--ink-faint); letter-spacing:.06em; }
+  .vh-corner.tl{ top:12px; left:14px; }
+  .vh-corner.tr{ top:12px; right:14px; text-align:right; }
+  .vh-corner.bl{ bottom:12px; left:14px; }
+  .vh-corner.br{ bottom:12px; right:14px; text-align:right; }
+  .vh-corner b{ color:var(--ink-dim); font-weight:600; }
+  #stageLabel{ color:var(--ink); font-family:var(--disp); font-size:13px; letter-spacing:.1em; }
+  #stageLabel.fan{ color:var(--c-fan); } #stageLabel.compressor{ color:var(--c-compressor); }
+  #stageLabel.combustor{ color:var(--c-combustor); } #stageLabel.turbine{ color:var(--c-turbine); }
+  .reticle{ position:absolute; top:50%; left:50%; width:1px; height:14px; background:var(--line); transform:translate(-50%,-50%); }
+  .reticle::after{ content:''; position:absolute; top:50%; left:50%; width:14px; height:1px; background:var(--line); transform:translate(-50%,-50%); }
+  .drag-hint{
+    position:absolute; bottom:14px; left:50%; transform:translateX(-50%);
+    font-size:9.5px; color:var(--ink-faint); letter-spacing:.08em; opacity:.8;
+  }
+
+  /* ---------- right column contents ---------- */
+  .metric-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px 10px; }
+  .metric{ border-left:1px solid var(--line); padding-left:8px; }
+  .metric .lbl{ font-size:8.5px; color:var(--ink-faint); letter-spacing:.08em; text-transform:uppercase; }
+  .metric .val{ font-size:15px; color:var(--ink); font-weight:500; margin-top:2px; }
+  .metric .val small{ font-size:9px; color:var(--ink-dim); margin-left:3px; font-weight:400; }
+  .metric.dim .val{ color:var(--ink-faint); }
+
+  #stageDetail{ font-size:10.5px; line-height:1.9; color:var(--ink-dim); flex:1; }
+  #stageDetail .k{ color:var(--ink-faint); }
+  #stageDetail .v{ color:var(--ink); float:right; }
+  #stageDetail .drow{ display:flex; justify-content:space-between; border-bottom:1px dashed rgba(255,255,255,0.06); padding:2px 0; }
+
+  .chart-blank{ flex:1; min-height:60px; }
+
+  /* ---------- bottom row ---------- */
+  #bottom .panel{ padding:8px 10px 10px; }
+  .bar-blank{ display:flex; align-items:flex-end; gap:3px; height:46px; }
+  .bar-blank i{ flex:1; background:linear-gradient(to top, rgba(255,255,255,0.05), rgba(255,255,255,0.16)); border-top:1px solid var(--line-strong); }
+
+  ::selection{ background:var(--accent); color:#000; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- TOP BAR -->
+  <div id="top">
+    <div class="brand">
+      <div class="mark"></div>
+      <h1>TF-9 <span>//</span> TURBOFAN X-RAY DIAGNOSTIC</h1>
+    </div>
+    <div class="status-chips">
+      <div class="chip on"><span class="led"></span>PWR</div>
+      <div class="chip on"><span class="led"></span>SIM ACTIVE</div>
+      <div class="chip"><span class="led"></span>AUTO-ALIGN</div>
+      <div class="chip warn"><span class="led"></span>THR 72%</div>
+      <div class="chip on"><span class="led"></span>SYS CHECK</div>
+      <div class="chip on"><span class="led"></span>SECURE LINK</div>
+    </div>
+  </div>
+
+  <!-- LEFT COLUMN -->
+  <div id="left" class="col">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">Stage Select<span class="dot"></span></div>
+      <div class="stage-select" id="stageSelect">
+        <button class="stage-btn" data-stage="fan"><span class="n">01</span><span class="swatch" style="color:var(--c-fan)"></span>FAN</button>
+        <button class="stage-btn" data-stage="compressor"><span class="n">02</span><span class="swatch" style="color:var(--c-compressor)"></span>COMPRESSOR</button>
+        <button class="stage-btn" data-stage="combustor"><span class="n">03</span><span class="swatch" style="color:var(--c-combustor)"></span>COMBUSTOR</button>
+        <button class="stage-btn" data-stage="turbine"><span class="n">04</span><span class="swatch" style="color:var(--c-turbine)"></span>TURBINE</button>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:0 0 auto;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Alert Ring</div>
+      <div class="ring-wrap"><svg width="92" height="92" viewBox="0 0 92 92" id="alertRing">
+        <circle cx="46" cy="46" r="40" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+        <circle cx="46" cy="46" r="40" fill="none" stroke="var(--ink-dim)" stroke-width="1" stroke-dasharray="4 6"/>
+        <circle cx="46" cy="46" r="33" fill="none" stroke="rgba(255,255,255,0.14)" stroke-width="1"/>
+        <path d="M46 30 L58 54 L34 54 Z" fill="none" stroke="var(--ink)" stroke-width="1.4" stroke-linejoin="round"/>
+        <text x="46" y="52" font-size="9" fill="var(--ink)" text-anchor="middle" font-family="JetBrains Mono">!</text>
+      </svg></div>
+    </div>
+
+    <div class="panel" style="flex:1;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Cycle Log</div>
+      <div class="log-table" id="cycleLog"></div>
+    </div>
+  </div>
+
+  <!-- CENTER VIEWPORT -->
+  <div id="center">
+    <div id="viewport-frame">
+      <canvas id="engine-canvas"></canvas>
+      <div class="viewport-hud">
+        <div class="vh-corner tl">SYS ID 3047<br><b>MODEL:</b> TF-9 TURBOFAN</div>
+        <div class="vh-corner tr">ORB-VEL 7.8KM/S<br><b>SIG</b> 95%</div>
+        <div class="vh-corner bl">STAGE &gt;&gt; <span id="stageLabel" class="none">NONE SELECTED</span></div>
+        <div class="vh-corner br">GRID-89 &nbsp; ALT-350KM<br><b>LOC</b>-7129</div>
+        <div class="reticle"></div>
+        <div class="drag-hint">DRAG TO ROTATE &nbsp;·&nbsp; SCROLL TO ZOOM</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN -->
+  <div id="right" class="col">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">Performance<span class="dot"></span></div>
+      <div class="metric-grid" id="perfGrid">
+        <div class="metric"><div class="lbl">N1 Speed</div><div class="val">-- <small>%</small></div></div>
+        <div class="metric"><div class="lbl">N2 Speed</div><div class="val">-- <small>%</small></div></div>
+        <div class="metric"><div class="lbl">EGT</div><div class="val">-- <small>°C</small></div></div>
+        <div class="metric"><div class="lbl">Thrust</div><div class="val">-- <small>kN</small></div></div>
+        <div class="metric"><div class="lbl">Fuel Flow</div><div class="val">-- <small>kg/h</small></div></div>
+        <div class="metric"><div class="lbl">Oil Press</div><div class="val">-- <small>psi</small></div></div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:0 0 auto;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Stage Detail</div>
+      <div id="stageDetail">
+        <div class="drow"><span class="k">Selected</span><span class="v">—</span></div>
+        <div class="drow"><span class="k">Blade Count</span><span class="v">--</span></div>
+        <div class="drow"><span class="k">Stage Temp</span><span class="v">-- °C</span></div>
+        <div class="drow"><span class="k">Pressure Ratio</span><span class="v">--</span></div>
+        <div class="drow"><span class="k">Material</span><span class="v">--</span></div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:1;">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Vibration Trend</div>
+      <svg class="chart-blank" viewBox="0 0 220 90" preserveAspectRatio="none" id="trendChart">
+        <g stroke="rgba(255,255,255,0.08)" stroke-width="1">
+          <line x1="0" y1="10" x2="220" y2="10"/><line x1="0" y1="30" x2="220" y2="30"/>
+          <line x1="0" y1="50" x2="220" y2="50"/><line x1="0" y1="70" x2="220" y2="70"/>
+        </g>
+        <line x1="20" y1="0" x2="20" y2="90" stroke="rgba(255,255,255,0.14)"/>
+        <line x1="20" y1="82" x2="220" y2="82" stroke="rgba(255,255,255,0.14)"/>
+        <polyline id="trendLine" fill="none" stroke="var(--ink-faint)" stroke-width="1"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- BOTTOM ROW -->
+  <div id="bottom">
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Thermal Map</div>
+      <div class="bar-blank" id="thermalBars"></div>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Airflow</div>
+      <svg width="100%" height="60" viewBox="0 0 220 60" preserveAspectRatio="none">
+        <polyline id="airflowWave" fill="none" stroke="var(--ink-faint)" stroke-width="1"/>
+      </svg>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title">Structural</div>
+      <svg width="100%" height="60" viewBox="0 0 120 120" id="radarChart">
+        <g fill="none" stroke="rgba(255,255,255,0.1)"><circle cx="60" cy="60" r="46"/><circle cx="60" cy="60" r="30"/><circle cx="60" cy="60" r="14"/></g>
+      </svg>
+    </div>
+    <div class="panel">
+      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      <div class="panel-title live">System Log<span class="dot"></span></div>
+      <div class="log-table" id="sysLog" style="font-size:9px;"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ============================================================
+   FILLER / PLACEHOLDER HUD DATA (visual noise only — not telemetry)
+   ============================================================ */
+(function fillDecor(){
+  const logRows = document.getElementById('cycleLog');
+  for(let i=0;i<11;i++){
+    const id = 'A' + (100+i*7).toString(16).toUpperCase();
+    const flagged = i===3 || i===7;
+    const row = document.createElement('div');
+    row.className = 'row' + (flagged ? ' flag' : '');
+    row.innerHTML = `<span>${id}-${(90+i).toString().padStart(2,'0')}</span><span>--.--</span>`;
+    logRows.appendChild(row);
+  }
+  const sys = document.getElementById('sysLog');
+  const msgs = ['LINK SYNC OK','TELEMETRY IDLE','AWAITING FEED','NODE 04 STANDBY','CACHE CLEAR','PORT 7421 OPEN','NO ANOMALY'];
+  msgs.forEach(m=>{
+    const row = document.createElement('div'); row.className='row';
+    row.innerHTML = `<span>${m}</span><span>--:--</span>`;
+    sys.appendChild(row);
+  });
+  const bars = document.getElementById('thermalBars');
+  for(let i=0;i<24;i++){ const b=document.createElement('i'); b.style.height = (8+ (i%5)*4)+'%'; bars.appendChild(b); }
+
+  let pts=[]; for(let x=0;x<=220;x+=11){ pts.push(x+','+(45+Math.sin(x*0.09)*4)); }
+  document.getElementById('airflowWave').setAttribute('points', pts.join(' '));
+  let tpts=[]; for(let x=0;x<=220;x+=14){ tpts.push(x+','+(82-Math.abs(Math.sin(x*0.05))*6)); }
+  document.getElementById('trendLine').setAttribute('points', tpts.join(' '));
+})();
+
+/* ============================================================
+   THREE.JS — PROCEDURAL TURBOFAN ENGINE
+   ============================================================ */
+const STAGE_COLORS = {
+  fan: 0x4fd8ff,
+  compressor: 0xffb347,
+  combustor: 0xff4d4d,
+  turbine: 0xb98bff
+};
+const NEUTRAL = 0xcfd6dc;
+const NEUTRAL_DIM = 0x50565c;
+
+let scene, camera, renderer, canvas, engineRig, shaftSpin;
+let stages = { fan:[], compressor:[], combustor:[], turbine:[] };
+let activeStage = null;
+
+let rotY = -0.55, rotX = -0.12, targetRotY = -0.55, targetRotX = -0.12;
+let isDragging = false, lastX=0, lastY=0, autoRotate = true, autoTimer = null;
+let camDist = 13, targetDist = 13;
+
+initScene();
+buildEngine();
+bindEvents();
+animate();
+
+function initScene(){
+  canvas = document.getElementById('engine-canvas');
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+  renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  resize();
+  window.addEventListener('resize', resize);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(6,9,8); scene.add(key);
+  const rim = new THREE.DirectionalLight(0x88aaff, 0.5); rim.position.set(-8,-4,-6); scene.add(rim);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.25); fill.position.set(0,-6,4); scene.add(fill);
+
+  engineRig = new THREE.Group();
+  scene.add(engineRig);
+  shaftSpin = new THREE.Group();
+  engineRig.add(shaftSpin);
+}
+
+function resize(){
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const h = canvas.clientHeight || canvas.parentElement.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+/* ---- geometry helpers ---- */
+function bladeDiskMesh({x, hubR, bladeCount, bladeLen, bladeW, colorHex}){
+  const group = new THREE.Group();
+  group.position.x = x;
+
+  const hubGeo = new THREE.CylinderGeometry(hubR, hubR, 0.34, 20, 1, false);
+  hubGeo.rotateZ(Math.PI/2);
+  const hubMat = new THREE.MeshStandardMaterial({ color:0x8b9198, metalness:0.75, roughness:0.35 });
+  group.add(new THREE.Mesh(hubGeo, hubMat));
+
+  const bladeMat = new THREE.MeshStandardMaterial({ color:colorHex, metalness:0.4, roughness:0.45, emissive:0x000000, side:THREE.DoubleSide });
+  const meshes = [];
+  for(let i=0;i<bladeCount;i++){
+    const a = (i/bladeCount) * Math.PI*2;
+    const bGeo = new THREE.BoxGeometry(0.035, bladeLen, bladeW);
+    bGeo.translate(0, bladeLen/2, 0);
+    const mat = bladeMat.clone();
+    const mesh = new THREE.Mesh(bGeo, mat);
+    mesh.position.set(0,0,0);
+    mesh.rotation.x = a;
+    mesh.rotation.z = 0.32;
+    mesh.userData.baseR = hubR;
+    // push outward along its own local Y after rotation by wrapping in a pivot
+    const pivot = new THREE.Group();
+    pivot.rotation.x = a;
+    const inner = new THREE.Mesh(bGeo, mat);
+    inner.position.y = hubR;
+    inner.rotation.z = 0.3;
+    pivot.add(inner);
+    group.add(pivot);
+    meshes.push(mat);
+  }
+  return { group, mats: meshes, hubMat };
+}
+
+function ringMesh(x, r1, r2, colorHex, opacity){
+  const geo = new THREE.RingGeometry(r1, r2, 40);
+  const mat = new THREE.MeshBasicMaterial({ color:colorHex, transparent:true, opacity:opacity, side:THREE.DoubleSide });
+  const m = new THREE.Mesh(geo, mat);
+  m.rotation.y = Math.PI/2;
+  m.position.x = x;
+  return { mesh:m, mat };
+}
+
+function buildEngine(){
+  // ---- central shaft ----
+  const shaftGeo = new THREE.CylinderGeometry(0.16, 0.16, 8.6, 16);
+  shaftGeo.rotateZ(Math.PI/2);
+  const shaftMat = new THREE.MeshStandardMaterial({ color:0x555b61, metalness:0.7, roughness:0.4 });
+  const shaft = new THREE.Mesh(shaftGeo, shaftMat);
+  shaft.position.x = -0.7;
+  shaftSpin.add(shaft);
+
+  // ---- spinner nose cone ----
+  const noseGeo = new THREE.ConeGeometry(0.42, 0.9, 20);
+  noseGeo.rotateZ(-Math.PI/2);
+  const noseMat = new THREE.MeshStandardMaterial({ color:0x9aa0a6, metalness:0.6, roughness:0.35 });
+  const nose = new THREE.Mesh(noseGeo, noseMat);
+  nose.position.x = -5.0;
+  shaftSpin.add(nose);
+
+  // ---- FAN ----
+  const fan = bladeDiskMesh({ x:-4.45, hubR:0.42, bladeCount:20, bladeLen:1.55, bladeW:0.62, colorHex:NEUTRAL });
+  shaftSpin.add(fan.group);
+  stages.fan.push(...fan.mats, fan.hubMat);
+
+  // ---- COMPRESSOR (2 stages, shrinking) ----
+  const comp1 = bladeDiskMesh({ x:-3.15, hubR:0.44, bladeCount:26, bladeLen:1.02, bladeW:0.34, colorHex:NEUTRAL });
+  const comp2 = bladeDiskMesh({ x:-2.45, hubR:0.46, bladeCount:30, bladeLen:0.84, bladeW:0.28, colorHex:NEUTRAL });
+  const comp3 = bladeDiskMesh({ x:-1.85, hubR:0.47, bladeCount:32, bladeLen:0.66, bladeW:0.24, colorHex:NEUTRAL });
+  [comp1,comp2,comp3].forEach(c=>{ shaftSpin.add(c.group); stages.compressor.push(...c.mats, c.hubMat); });
+
+  // ---- COMBUSTOR (static liner, no blades) ----
+  const combGroup = new THREE.Group();
+  combGroup.position.x = -1.05;
+  const combGeo = new THREE.CylinderGeometry(0.58, 0.5, 1.05, 24, 1, true);
+  combGeo.rotateZ(Math.PI/2);
+  const combMat = new THREE.MeshStandardMaterial({ color:0x707680, metalness:0.3, roughness:0.6, transparent:true, opacity:0.55, side:THREE.DoubleSide, emissive:0x000000 });
+  const combMesh = new THREE.Mesh(combGeo, combMat);
+  combGroup.add(combMesh);
+  // glow rings inside
+  const glowRings = [];
+  for(let i=0;i<3;i++){
+    const rg = ringMesh(-0.32 + i*0.32, 0.1, 0.5, NEUTRAL, 0.0);
+    combGroup.add(rg.mesh);
+    glowRings.push(rg.mat);
+  }
+  engineRig.add(combGroup);
+  stages.combustor.push(combMat, ...glowRings);
+
+  // ---- TURBINE (2 stages, hot side) ----
+  const turb1 = bladeDiskMesh({ x:-0.15, hubR:0.42, bladeCount:24, bladeLen:0.6, bladeW:0.3, colorHex:NEUTRAL });
+  const turb2 = bladeDiskMesh({ x:0.42, hubR:0.4, bladeCount:22, bladeLen:0.72, bladeW:0.32, colorHex:NEUTRAL });
+  [turb1,turb2].forEach(t=>{ shaftSpin.add(t.group); stages.turbine.push(...t.mats, t.hubMat); });
+
+  // ---- exhaust nozzle ----
+  const nozGeo = new THREE.CylinderGeometry(0.55, 0.32, 1.4, 20, 1, true);
+  nozGeo.rotateZ(Math.PI/2);
+  const nozMat = new THREE.MeshStandardMaterial({ color:0x74797f, metalness:0.55, roughness:0.4, transparent:true, opacity:0.6, side:THREE.DoubleSide });
+  const nozzle = new THREE.Mesh(nozGeo, nozMat);
+  nozzle.position.x = 1.55;
+  engineRig.add(nozzle);
+
+  // ---- outer nacelle (x-ray wireframe casing) ----
+  const nacGeo = new THREE.CylinderGeometry(1.95, 1.7, 7.0, 28, 6, true);
+  nacGeo.rotateZ(Math.PI/2);
+  const nacMat = new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, transparent:true, opacity:0.07 });
+  const nacelle = new THREE.Mesh(nacGeo, nacMat);
+  nacelle.position.x = -1.1;
+  engineRig.add(nacelle);
+
+  // ---- axis guideline ----
+  const axisGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-6,0,0), new THREE.Vector3(4,0,0)]);
+  const axisMat = new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.06 });
+  engineRig.add(new THREE.Line(axisGeo, axisMat));
+}
+
+/* ---- stage selection ---- */
+function setActiveStage(name){
+  activeStage = (activeStage === name) ? null : name;
+
+  Object.keys(stages).forEach(key=>{
+    const on = activeStage === null ? true : (key === activeStage);
+    const color = activeStage === null ? NEUTRAL : (key === activeStage ? STAGE_COLORS[key] : NEUTRAL_DIM);
+    const emissive = (activeStage === key) ? STAGE_COLORS[key] : 0x000000;
+    const emissiveIntensity = activeStage === key ? 0.55 : 0;
+    const opacity = activeStage === null ? null : (key === activeStage ? null : 0.35);
+
+    stages[key].forEach(mat=>{
+      if(mat.color) mat.color.setHex(color);
+      if('emissive' in mat) { mat.emissive.setHex(emissive); mat.emissiveIntensity = emissiveIntensity; }
+      if(mat.opacity !== undefined && mat.transparent){
+        if(key === 'combustor'){
+          mat.opacity = (activeStage === 'combustor') ? 0.85 : (activeStage === null ? 0.55 : 0.2);
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll('.stage-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.stage === activeStage);
+  });
+
+  const label = document.getElementById('stageLabel');
+  const details = {
+    fan:      { name:'FAN',        blades:'20', temp:'15–45',    ratio:'1.5 : 1', mat:'Ti-6Al-4V' },
+    compressor:{ name:'COMPRESSOR', blades:'26–32 / stage', temp:'80–540',  ratio:'11 : 1',  mat:'Ni-Alloy' },
+    combustor:{ name:'COMBUSTOR',  blades:'—',    temp:'1200–1800', ratio:'—',       mat:'Ceramic Liner' },
+    turbine:  { name:'TURBINE',    blades:'22–24 / stage', temp:'900–1150', ratio:'4.2 : 1', mat:'Single-Crystal Ni' }
+  };
+  if(activeStage){
+    label.textContent = details[activeStage].name + ' — HIGHLIGHTED';
+    label.className = activeStage;
+    const d = details[activeStage];
+    document.getElementById('stageDetail').innerHTML = `
+      <div class="drow"><span class="k">Selected</span><span class="v">${d.name}</span></div>
+      <div class="drow"><span class="k">Blade Count</span><span class="v">${d.blades}</span></div>
+      <div class="drow"><span class="k">Stage Temp</span><span class="v">${d.temp} °C</span></div>
+      <div class="drow"><span class="k">Pressure Ratio</span><span class="v">${d.ratio}</span></div>
+      <div class="drow"><span class="k">Material</span><span class="v">${d.mat}</span></div>`;
+  } else {
+    label.textContent = 'NONE SELECTED';
+    label.className = 'none';
+    document.getElementById('stageDetail').innerHTML = `
+      <div class="drow"><span class="k">Selected</span><span class="v">—</span></div>
+      <div class="drow"><span class="k">Blade Count</span><span class="v">--</span></div>
+      <div class="drow"><span class="k">Stage Temp</span><span class="v">-- °C</span></div>
+      <div class="drow"><span class="k">Pressure Ratio</span><span class="v">--</span></div>
+      <div class="drow"><span class="k">Material</span><span class="v">--</span></div>`;
+  }
+}
+
+document.getElementById('stageSelect').addEventListener('click', (e)=>{
+  const btn = e.target.closest('.stage-btn');
+  if(btn) setActiveStage(btn.dataset.stage);
+});
+
+/* ---- pointer drag rotate + wheel zoom ---- */
+function bindEvents(){
+  canvas.addEventListener('pointerdown', (e)=>{
+    isDragging = true; autoRotate = false;
+    lastX = e.clientX; lastY = e.clientY;
+    canvas.classList.add('dragging');
+    canvas.setPointerCapture(e.pointerId);
+    clearTimeout(autoTimer);
+  });
+  canvas.addEventListener('pointermove', (e)=>{
+    if(!isDragging) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    targetRotY += dx * 0.006;
+    targetRotX = Math.max(-1.1, Math.min(1.1, targetRotX + dy * 0.006));
+  });
+  function endDrag(e){
+    if(!isDragging) return;
+    isDragging = false;
+    canvas.classList.remove('dragging');
+    autoTimer = setTimeout(()=>{ autoRotate = true; }, 2200);
+  }
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointerleave', endDrag);
+  canvas.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    targetDist = Math.max(7, Math.min(24, targetDist + e.deltaY * 0.01));
+  }, { passive:false });
+}
+
+/* ---- animation loop ---- */
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+
+  if(autoRotate) targetRotY += dt * 0.06;
+
+  rotY += (targetRotY - rotY) * 0.08;
+  rotX += (targetRotX - rotX) * 0.08;
+  camDist += (targetDist - camDist) * 0.08;
+
+  camera.position.x = Math.sin(rotY) * Math.cos(rotX) * camDist;
+  camera.position.z = Math.cos(rotY) * Math.cos(rotX) * camDist;
+  camera.position.y = Math.sin(rotX) * camDist * 0.9;
+  camera.lookAt(0,0,0);
+
+  shaftSpin.rotation.x += dt * 2.4;
+
+  renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
