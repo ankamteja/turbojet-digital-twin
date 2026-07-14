@@ -70,6 +70,13 @@ physics-based** — generated from a realistic turbojet simulation rather than a
 real jet, but it obeys real thermodynamics. It contains **10 engines × 30 cycles
 = 300 rows**. Each row is one snapshot of one engine at one point in its life.
 
+That generating simulation is **not part of this repository** — the data arrives
+ready-made as the CSV files in `data/`, and this project's job starts from those
+files. (Note: the word "simulate" *does* appear in our own code, in
+`src/backend/service.py`, but it means something different — projecting an
+engine's health into *future* cycles beyond the data, covered in file 6 — not
+generating the dataset.)
+
 The data is split into files:
 
 - `train.csv` (240 rows) — used to teach the model.

@@ -64,12 +64,15 @@ export function initControls({ engines, onEngineChange, onCycleChange }) {
 
   // ---- play / pause ----
   function step() {
-    // Loop the engine's life: wrap back to cycle 1 after the last cycle.
-    cycle = cycle >= maxCycle ? 1 : cycle + 1;
+    // Recorded telemetry ends at maxCycle — stop there rather than looping.
+    if (cycle >= maxCycle) { stop(); return; }
+    cycle = cycle + 1;
     emitCycle();
   }
 
   function start() {
+    // If we're already at the end of the data, replay the life from the start.
+    if (cycle >= maxCycle) { cycle = 1; emitCycle(); }
     playing = true;
     playBtn.textContent = '❚❚ PAUSE';
     playBtn.classList.add('playing');
