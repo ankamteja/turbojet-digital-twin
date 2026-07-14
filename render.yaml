@@ -1,0 +1,35 @@
+# Render blueprint — one-click deploy of the whole digital twin.
+# Spins up two free services: the FastAPI backend and the static dashboard.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# The backend trains the surrogate at build time (the model artifact is not
+# committed), then serves it. The dashboard is static files; its build step
+# rewrites the backend URL into api.js so the two halves find each other.
+
+services:
+  # ---- backend: FastAPI + the trained surrogate model ----
+  - type: web
+    name: turbojet-api
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt && python src/model/train.py"
+    startCommand: "cd src/backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.12"
+
+  # ---- frontend: static vanilla-JS dashboard ----
+  - type: web
+    name: turbojet-dashboard
+    runtime: static
+    rootDir: src/frontend
+    # Inject the backend's real URL in place of the __BACKEND_URL__ placeholder.
+    buildCommand: "sed -i \"s|__BACKEND_URL__|$BACKEND_URL|g\" js/api.js"
+    staticPublishPath: .
+    envVars:
+      - key: BACKEND_URL
+        fromService:
+          type: web
+          name: turbojet-api
+          property: host

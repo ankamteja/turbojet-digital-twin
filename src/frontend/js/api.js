@@ -2,10 +2,12 @@
 // The backend already normalises everything into the EngineState shape,
 // so these helpers just do the HTTP round-trip and surface errors.
 
-// Backend runs separately (uvicorn on :8000). We hard-code the origin rather
-// than deriving it from location.origin because the frontend is served from a
-// different port (python -m http.server), so same-origin would break.
-const BASE = 'http://localhost:8000';
+// The backend runs as a separate service, so we can't use location.origin.
+// Local dev: uvicorn on :8000. Deployed: the build step replaces the
+// __BACKEND_URL__ placeholder with the backend service's real host, so the
+// same file works in both places without editing.
+const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const BASE = LOCAL ? 'http://localhost:8000' : 'https://__BACKEND_URL__';
 
 async function getJSON(path) {
   const res = await fetch(BASE + path);
