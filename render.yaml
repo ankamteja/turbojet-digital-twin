@@ -28,8 +28,8 @@ services:
     buildCommand: "sed -i \"s|__BACKEND_URL__|$BACKEND_URL|g\" js/api.js"
     staticPublishPath: .
     envVars:
+      # The backend's public host. (Render's fromService `host` returns the
+      # internal service name, not the public *.onrender.com URL, so set it
+      # explicitly — it's the api service's name + onrender.com.)
       - key: BACKEND_URL
-        fromService:
-          type: web
-          name: turbojet-api
-          property: host
+        value: turbojet-api.onrender.com
