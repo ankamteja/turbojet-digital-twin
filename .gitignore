@@ -34,3 +34,6 @@ build/
 # Problem statement / internal planning (keep out of the public repo)
 *.pdf
 docs/coverage-report.md
+
+# internal planning (kept local)
+docs/project-plan.md

@@ -15,7 +15,8 @@ final product.
   Compressor 0.72–1.0, Combustor 0.89–1.0, Turbine 0.79–1.0, Overall 0.80–1.0.
   Thrust 13.3k–88.7k N, TSFC 0.0099–0.0381 g/N·s.
 - **Physics anchor:** `TSFC_g_N_s ≈ 1000 · FuelFlow_kg_s / Thrust_N` (verified within ~1%).
-  Couples the two performance targets — used as a hard-ish physics loss.
+  Couples the two performance targets — TSFC is *derived* from predicted thrust, never a
+  free output (hard constraint, see §1).
 
 ### Columns
 
@@ -30,47 +31,56 @@ Targets: `CompressorHealth, CombustorHealth, TurbineHealth, OverallHealth` (0–
 
 ## 1. Model (`src/model/`)
 
+The surrogate is a **bootstrap ensemble of monotonic gradient-boosted trees**
+(scikit-learn `HistGradientBoostingRegressor`), one ensemble per learned target. Trees were
+chosen over a neural net because the data is small and tabular (240 rows) — they estimate the
+subtle component-health signal far better (test health mean `R²` ~0.86 vs ~0.62 for an earlier
+MLP) while staying interpretable and fast. Physics is enforced as **hard structural
+constraints**, not soft penalties.
+
 ### Features
 
 - **Drop `EngineID`** as a model input (identity, would leak; keep only as grouping key).
 - **Keep `Cycle`** — real degradation driver.
 - Raw sensors: `Altitude_m, Mach, Tamb_K, Pamb_Pa, RPM_rev_min, FuelFlow_kg_s, P2..T4` (12).
-- **Derived physics features** (`physics.py`):
+- **Derived physics features** (`add_physics_features`, `physics.py`) — 8 columns:
   - Compressor pressure ratio `PR_c = P3/P2`, temp ratio `TR_c = T3/T2`
-  - Combustor `TR_b = T4/T3`, pressure drop `P4/P3`
-  - Overall `TR = T4/T2`, `PR = P4/P2`
-  - Corrected RPM `RPM/sqrt(T2)`, corrected fuel `FuelFlow/(P2·sqrt(T2))`
-- Scale inputs with `StandardScaler`; scale Thrust with its own scaler (large magnitude).
-  Health already 0–1 (sigmoid output, no scaling). TSFC derived from thrust+fuel.
+  - Combustor `TR_b = T4/T3`, turbine-section `PR_t = P4/P3`
+  - Overall `TR_overall = T4/T2`, `PR_overall = P4/P2`
+  - Corrected RPM `RPM_corr = RPM/sqrt(T2)`, corrected fuel `Fuel_corr = FuelFlow/(P2·sqrt(T2))`
+- Final feature vector = 13 raw + 8 derived = **21 dims**. **No scaling** — trees are
+  scale-invariant, so there is no scaler to fit or leak.
 
-### Network (`net.py`, PyTorch)
+### Base learner (`models.py`)
 
-Shared MLP trunk → two heads:
-- **Health head** → 4 outputs, `sigmoid` → [0,1].
-- **Performance head** → `Thrust` (linear, scaled) ; TSFC derived via physics relation, plus a
-  small learned residual head for correction.
-- Dropout in trunk (feeds MC-dropout option). ~2–3 hidden layers, width 64–128. Small data,
-  keep it compact + regularized (weight decay, early stop on val).
+Each member is a `HistGradientBoostingRegressor`: `max_iter=400`, `learning_rate=0.05`,
+`max_depth=3`, `l2_regularization=1.0`, `loss="squared_error"`. Shallow trees + L2 keep it
+regularized on the small dataset.
+
+### Hard physics constraints
+
+1. **Monotonic degradation** — each health ensemble gets `monotonic_cst = -1` on `Cycle`, so
+   predicted health can *never* rise as the engine ages. The boosting algorithm refuses any
+   split that would violate this — rising health is structurally unrepresentable, not merely
+   penalized.
+2. **Derived TSFC** — TSFC is never learned. It is computed per ensemble member from predicted
+   thrust via `TSFC = 1000·FuelFlow/Thrust` (`tsfc_from_fuel_thrust`, thrust floored at 1.0),
+   so thrust and TSFC agree by construction and TSFC uncertainty is propagated from thrust.
+3. **Overall-health aggregation** — `OverallHealth` is learned by its own ensemble, then
+   checked against `mean(3 subsystem healths)` as an independent physics-consistency residual
+   (`overall_aggregation_residual`) — a coherence test, reported, not a training penalty.
 
 ### Uncertainty
 
-**Deep ensemble** — train N=5 nets with different seeds. Prediction = mean; confidence =
-1 − normalized ensemble std. Cheap on this data, more robust than single-net MC-dropout.
-(MC-dropout kept as fallback if ensemble too heavy.)
+**Bootstrap ensemble** — `N=10` members per target, each fit on an independent bootstrap
+resample of the training rows. Prediction = member mean; confidence = 1 − normalized ensemble
+std (tight agreement = confident). No separate MC-dropout machinery needed.
 
-### Physics-informed losses (`physics.py`)
+### Interpretability
 
-Added to base MSE (health + thrust):
-1. **TSFC consistency** — `pred_TSFC` vs `1000·FuelFlow/pred_Thrust`. Ties thrust↔TSFC.
-2. **Overall-health aggregation** — `OverallHealth` ≈ learned/weighted combo of the three
-   subsystem healths; penalize divergence.
-3. **Monotonic degradation** — within an engine, health should not increase with `Cycle`;
-   penalize positive cycle-over-cycle deltas (soft hinge).
-4. **Ratio ↔ health coupling** — degraded compressor achieves lower `PR_c` at given corrected
-   RPM; soft penalty enforcing the correlation sign. (Weak weight — guardrail, not driver.)
-
-Loss = `MSE_health + α·MSE_thrust + β·L_tsfc + γ·L_overall + δ·L_mono + ε·L_ratio`.
-Weights tuned on validation split.
+Permutation feature importance per target (`_compute_importances`, `importances.json`) — a
+global explanation of which sensors/ratios drive each estimate. Health leans hardest on
+`Cycle`; thrust on `FuelFlow_kg_s` and spool speed, matching physics.
 
 ### Derived outputs (`predict.py`)
 
@@ -84,33 +94,41 @@ Weights tuned on validation split.
 
 ### Artifacts
 
-`src/model/artifacts/`: ensemble weights (`net_{i}.pt`), `scalers.pkl`, `config.json`,
-`metrics.json`. Small — track in git (few hundred KB) so backend runs without retraining.
+`src/model/artifacts/` (git-ignored, regenerate via `python train.py`): the whole ensemble
+serialized as a single `surrogate.joblib`, plus `config.json`, `metrics.json`,
+`importances.json`, `generalization.json`. Loaded once by the backend at startup.
 
-### Eval (`eval.py`)
+### Eval (`eval.py`, `generalize.py`)
 
-On `test.csv` vs `ground_truth.csv`: per-target MAE / R². Report table for the technical report.
+- `eval.py` — on `test.csv` vs `ground_truth.csv`: per-target MAE / R², physics residuals,
+  inference latency → `metrics.json`.
+- `generalize.py` — **leave-one-engine-out** cross-validation (retrain on 9 engines, score the
+  held-out one) → `generalization.json`. The harder *extrapolation* question the standard
+  interpolation split can't answer.
 
 ### Files
 
 ```
 src/model/
-  data.py       load csv, merge ground_truth, feature eng, scale, train/val split
-  physics.py    derived features + physics loss terms + TSFC/RUL relations
-  net.py        multi-head MLP
-  train.py      ensemble training loop, early stop, save artifacts
-  predict.py    load ensemble → mean+std, trajectory, RUL, recommendation
-  eval.py       test metrics
-  artifacts/    saved weights + scalers + config + metrics
+  data.py        load csv, merge ground_truth, feature eng, X/y split (no scaler — trees)
+  physics.py     derived features + TSFC/aggregation/RUL relations (feature engineering)
+  models.py      SurrogateEnsemble — boosted-tree bootstrap ensemble, hard constraints
+  train.py       fit ensemble, save surrogate.joblib + config + importances
+  predict.py     load ensemble → mean+std, trajectory, RUL, recommendation
+  eval.py        test metrics + physics residuals + latency
+  generalize.py  leave-one-engine-out generalization
+  artifacts/     surrogate.joblib + config + metrics + importances + generalization (ignored)
 ```
 
 ---
 
 ## 2. Backend (`src/backend/`, FastAPI)
 
-Loads ensemble + scalers once at startup (`service.py` wraps `model/predict.py`).
-Precompute per-engine per-cycle states from `ground_truth`/complete dataset at boot; cache.
-CORS open for frontend dev.
+Loads the `surrogate.joblib` ensemble once at startup (`service.py` wraps `model/predict.py`).
+Precompute per-engine per-cycle states from the complete dataset at boot; cache so dashboard
+requests are constant-time lookups. CORS open for frontend dev. `main.py` caps
+OMP/OPENBLAS/MKL/LOKY threads to 1 *before* importing sklearn — else the many small
+startup predictions oversubscribe the CPU and boot stalls.
 
 ### Endpoints
 
@@ -131,6 +149,8 @@ CORS open for frontend dev.
   "cycle": 10,
   "conditions": { "altitude_m": 7193.9, "mach": 0.14, "tamb_k": 240.1,
                   "pamb_pa": 39779, "rpm": 37691.7, "fuel_flow_kg_s": 0.302 },
+  "sensors": { "p2_pa": 294450, "t2_k": 455.2, "p3_pa": 274834, "t3_k": 2055.7,
+               "p4_pa": 191656, "t4_k": 1842.1, "n_pct": 77.3 },
   "health": {
     "compressor": { "value": 0.94, "confidence": 0.97, "trend": -0.004,
                     "rul_cycles": 42, "recommendation": "monitor",
@@ -161,48 +181,54 @@ src/backend/
 
 ---
 
-## 3. Frontend (`src/frontend/`, React + Vite + R3F)
+## 3. Frontend (`src/frontend/`, vanilla JS + Three.js)
 
-3D engine is the centerpiece. Data only from backend `EngineState`.
+Plain ES modules — no framework, no build step; served as static files. Reuses the teammate's
+HUD look (CSS/layout) but is driven entirely by the backend `EngineState`, with no placeholder
+numbers. The 3D engine is the centerpiece.
 
-- **Engine3D** — R3F scene, 4 selectable meshes (compressor / combustor / turbine / overall
-  casing). Mesh color mapped green→red by health. Click selects → drill-down.
-- **DrillDown** — selected component: current health, degradation history chart, contributing
-  sensor values, projected RUL, confidence, recommendation.
-- **HealthPanel** — 4 health gauges, predicted thrust, TSFC, overall confidence.
-- **Conditions** — live operating conditions (altitude, Mach, RPM, fuel flow, ambient).
-- **Charts** — degradation trend + confidence band (Plotly or Chart.js).
-- **Alerts** — auto health alerts from `EngineState.alerts`.
-- **Controls** — engine selector + cycle slider / play button to step cycles (drives repeated
-  `/state?cycle=n` calls → live-updating twin). Simulate button hits `/simulate`.
+- **`scene.js`** — procedural Three.js engine, 4 selectable stages (fan/compressor / combustor
+  / turbine). `setStageHealth` colors a stage green→red by health; clicking a stage selects it.
+- **`dashboard.js`** — maps `EngineState` onto the HUD: performance gauges (N1/N2, EGT, thrust,
+  fuel flow), sensor readouts, system log, and the STAGE DETAIL drill-down (health, confidence,
+  RUL, recommendation, contributing sensor ratios). `renderConfidenceBand` +
+  `projectStage`/`drawProjection` draw the projected-degradation view from `/simulate`.
+- **`controls.js`** — engine dropdown + cycle slider with Play/Pause that steps cycles, driving
+  repeated `/state?cycle=n` calls into a live-updating twin.
+- **`api.js`** — fetch wrappers (`getEngines`/`getState`/`getHistory`/`getSimulate`); backend
+  origin hard-coded to `http://localhost:8000`.
+- **`main.js`** — wires it together on load.
 
 ### Files
 
 ```
 src/frontend/
-  index.html, vite.config.js, package.json
-  src/
-    api.js               fetch wrappers → EngineState
-    App.jsx              layout + state (selected engine/cycle/component)
-    components/
-      Engine3D.jsx  DrillDown.jsx  HealthPanel.jsx
-      Conditions.jsx  Charts.jsx  Alerts.jsx  Controls.jsx
+  index.html          HUD markup
+  styles.css          HUD styling (from teammate's UI, cleaned)
+  js/
+    api.js            fetch wrappers → EngineState
+    scene.js          Three.js procedural engine + stage highlighting
+    dashboard.js      EngineState → HUD panels + drill-down + projection/confidence band
+    controls.js       engine selector + cycle play/pause
+    main.js           bootstrap / wiring
 ```
 
 ---
 
-## 4. Milestones
+## 4. Build order (as delivered)
 
-1. **M1 Model** — `data.py`+`physics.py`+`net.py`+`train.py`+`eval.py`; ensemble trained,
-   artifacts saved, test metrics table.
-2. **M2 Backend** — FastAPI serving `EngineState` from artifacts; verify all endpoints.
-3. **M3 Frontend** — Vite app, 3D engine + panels wired to backend; live cycle stepping.
-4. **M4 Polish** — simulate/RUL projection, alerts, confidence bands, technical report + eval
-   numbers, presentation.
+1. **Model** — `data.py`+`physics.py`+`models.py`+`train.py`+`eval.py`; ensemble trained,
+   `surrogate.joblib` saved, test-metrics table; `generalize.py` for LOEO.
+2. **Backend** — FastAPI serving `EngineState` from the artifact; all endpoints verified.
+3. **Frontend** — vanilla-JS HUD, 3D engine + panels wired to backend; live cycle stepping.
+4. **Polish** — simulate/RUL projection, alerts, confidence bands, technical report with real
+   eval numbers, concept docs, presentation.
 
-## 5. Open decisions
+## 5. Resolved decisions
 
-- Uncertainty: **deep ensemble (N=5)** recommended — confirm vs MC-dropout.
-- RUL failure threshold: default `OverallHealth = 0.80` — confirm.
-- Charts lib: **Plotly** (richer, confidence bands) vs Chart.js (lighter).
-- Track model artifacts in git (yes, small) vs regenerate on deploy.
+- Model: **boosted-tree bootstrap ensemble (N=10)** — chosen over the earlier MLP after it
+  raised health `R²` ~0.62→0.86.
+- Uncertainty: **ensemble spread** (no MC-dropout).
+- RUL failure threshold: **`OverallHealth = 0.80`**.
+- No charting library — HUD panels drawn directly in the vanilla-JS frontend.
+- Model artifacts **git-ignored**, regenerated via `train.py`.
