@@ -64,9 +64,12 @@ Sensors / dataset
   → dashboard
 ```
 
-Physics-informed losses keep predictions physically meaningful — e.g. enforcing consistency
-between pressure/temperature ratios and the estimated component health, so the model does
-not fit the data at the expense of thermodynamic sense.
+The surrogate is a bootstrap ensemble of monotonic gradient-boosted trees — one ensemble per
+target — chosen over a neural network because the dataset is small and tabular. Physics is
+enforced as **hard structural constraints**: health can never rise as the engine ages
+(monotonic constraint on cycle), and TSFC is derived from predicted thrust rather than fit
+independently, so the two performance numbers agree by construction. Uncertainty comes from
+the ensemble's spread; interpretability from permutation feature importances.
 
 ## Dashboard
 
@@ -79,25 +82,48 @@ Alongside the model the dashboard shows live operating conditions, the four heal
 predicted thrust, fuel efficiency, degradation trend, confidence intervals, and health
 alerts that update automatically.
 
-## Planned stack
+## Stack
 
-- **Frontend:** React, Three.js (React Three Fiber)
-- **Backend:** FastAPI
-- **Modeling:** Python, PyTorch / scikit-learn
-- **Visualization:** Plotly / Chart.js
+- **Modeling:** Python, scikit-learn (gradient-boosted trees), pandas, numpy
+- **Backend:** FastAPI + uvicorn
+- **Frontend:** vanilla JavaScript (ES modules) + Three.js — no framework, no build step
+
+## Quickstart
+
+```bash
+# 1. install dependencies
+pip install -r requirements.txt
+
+# 2. train the surrogate (writes src/model/artifacts/)
+cd src/model && python train.py
+
+# 3. run the backend API (from src/backend/, serves on :8000)
+cd ../backend && uvicorn main:app --port 8000
+
+# 4. serve the dashboard (from src/frontend/, in a second terminal)
+cd ../frontend && python -m http.server 8080
+# then open http://localhost:8080/index.html
+```
+
+Optional: `python src/model/eval.py` writes test metrics, and
+`python src/model/generalize.py` runs the leave-one-engine-out generalization study.
 
 ## Repository layout
 
 ```
 data/    dataset (inputs, targets, combined)
-docs/    project plan and design notes
-src/     model + backend + frontend (in progress)
+docs/    concept guides, technical report, architecture, presentation
+src/
+  model/     feature engineering, surrogate ensemble, training, evaluation
+  backend/   FastAPI service exposing the EngineState contract
+  frontend/  vanilla-JS + Three.js dashboard
 ```
 
-## Status
+## Documentation
 
-Early scaffold. Dataset and design are in place; modeling and dashboard are under
-development. See `docs/project-plan.md`.
+`docs/concepts/` walks through every concept from scratch (digital twins → feature
+engineering → the model → physics constraints → uncertainty → API → dashboard).
+`docs/technical-report.md` is the results write-up; `docs/architecture.md` the design.
 
 ## License
 

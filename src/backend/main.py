@@ -22,7 +22,7 @@ from service import TwinService
 
 app = FastAPI(title="Turbojet Digital Twin API", version="1.0")
 
-# open CORS for local frontend dev (Vite default ports)
+# open CORS for local frontend dev (static server on :8080)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

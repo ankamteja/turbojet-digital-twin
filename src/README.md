@@ -1,7 +1,8 @@
 # src
 
-Implementation lands here.
+- `model/` — feature engineering, the gradient-boosted-tree surrogate ensemble (hard physics
+  constraints), training, evaluation, and leave-one-engine-out generalization
+- `backend/` — FastAPI service exposing predictions to the dashboard via the EngineState contract
+- `frontend/` — vanilla-JS + Three.js dashboard
 
-- `model/` — surrogate models, physics-informed training, health + performance estimation
-- `backend/` — FastAPI service exposing predictions to the dashboard
-- `frontend/` — React + Three.js dashboard
+See the repository root `README.md` for the quickstart.

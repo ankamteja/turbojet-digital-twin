@@ -31,9 +31,7 @@ build/
 .idea/
 .vscode/
 
-# Problem statement / internal planning (keep out of the public repo)
+# Problem statement / internal planning (kept local, out of the public repo)
 *.pdf
 docs/coverage-report.md
-
-# internal planning (kept local)
 docs/project-plan.md
