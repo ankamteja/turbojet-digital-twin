@@ -15,7 +15,10 @@ export function initControls({ engines, onEngineChange, onCycleChange }) {
 
   let engineId = engines[0].engine_id;
   let maxCycle = engines[0].max_cycle;
-  let cycle = 1;
+  // Open on the engine's latest cycle — a digital twin should show the engine's
+  // *current* (most-aged) state, not a brand-new one that always reads ~100%.
+  // Scrub back or hit Play to replay its life from the start.
+  let cycle = maxCycle;
   let playing = false;
   let timer = null;
 
@@ -45,7 +48,7 @@ export function initControls({ engines, onEngineChange, onCycleChange }) {
     engineId = parseInt(engineSel.value, 10);
     const info = engines.find(e => e.engine_id === engineId);
     maxCycle = info.max_cycle;
-    cycle = 1;                     // restart at the beginning of the new engine
+    cycle = maxCycle;              // show the new engine at its current (latest) cycle
     setCycleBounds();
     emitCycle();
     onEngineChange(engineId);
