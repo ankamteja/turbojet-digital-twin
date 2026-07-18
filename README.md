@@ -5,6 +5,15 @@ four-stage turbojet engine. The system reconstructs hidden component health and 
 engine performance from a limited set of sensor measurements, and drives an interactive
 dashboard that renders the engine as a live digital asset.
 
+## Live demo
+
+- **Dashboard:** https://turbojet-dashboard.onrender.com
+- **API:** https://turbojet-api.onrender.com
+
+Both run on Render's free tier, so the backend sleeps after ~15 min idle — the first
+request after a nap takes ~30–60 s to wake and reload the model, then it's responsive.
+Open the link a minute before you need it. See `DEPLOY.md` for one-click redeploy.
+
 ## Motivation
 
 Turbojet components degrade over their operational life — compressor fouling, turbine
