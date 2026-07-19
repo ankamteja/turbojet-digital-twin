@@ -80,6 +80,40 @@ enforced as **hard structural constraints**: health can never rise as the engine
 independently, so the two performance numbers agree by construction. Uncertainty comes from
 the ensemble's spread; interpretability from permutation feature importances.
 
+## Results
+
+Test-split accuracy (R² against held-out ground truth):
+
+| Target | R² |
+|--------|-----|
+| OverallHealth | 0.95 |
+| CompressorHealth | 0.94 |
+| CombustorHealth | 0.78 |
+| TurbineHealth | 0.73 |
+| Thrust_N | 0.99 |
+| TSFC_g_N_s | 0.98 |
+
+A leave-one-engine-out study (train on 9 engines, test on the held-out one) checks
+generalization to unseen engines: thrust and TSFC hold at ≥0.97, overall health at 0.91,
+with combustor health the weakest target (0.46) — its degradation signal is the subtlest in
+the sensor set. Full breakdown in `docs/technical-report.md`.
+
+## API
+
+The backend precomputes every prediction at startup and serves them over a small JSON API:
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /api/health` | Service liveness check |
+| `GET /api/engines` | Engine IDs and their max cycle |
+| `GET /api/engine/{id}/state?cycle=n` | Full `EngineState` at one cycle |
+| `GET /api/engine/{id}/history` | Per-cycle predictions vs. ground truth |
+| `GET /api/engine/{id}/simulate?to_cycle=m` | Projected health into future cycles |
+| `POST /api/predict` | Health + performance for an arbitrary sensor reading |
+
+`POST /api/predict` accepts a raw sensor row, so the twin works on simulator or real
+telemetry, not just the bundled dataset.
+
 ## Dashboard
 
 The engine is presented as a live 3D model rather than a wall of gauges. Four components are
