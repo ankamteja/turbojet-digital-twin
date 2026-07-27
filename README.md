@@ -168,6 +168,15 @@ src/
 engineering → the model → physics constraints → uncertainty → API → dashboard).
 `docs/technical-report.md` is the results write-up; `docs/architecture.md` the design.
 
+## Deployment
+
+`render.yaml` describes the hosted setup behind the live demo — the backend as a
+web service and the dashboard as a static site. Step-by-step instructions,
+including the environment variables the frontend needs to reach the API, are in
+[DEPLOY.md](DEPLOY.md). The trained artifacts under `src/model/artifacts/` must
+exist before the backend starts, so training runs as part of the build, not at
+request time.
+
 ## License
 
 MIT — see `LICENSE`.
