@@ -1,0 +1,5 @@
+# Development-only dependencies. Runtime deps live in requirements.txt.
+-r requirements.txt
+
+pytest==9.1.1
+httpx==0.29.2          # FastAPI's TestClient transport
