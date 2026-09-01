@@ -31,7 +31,8 @@ import numpy as np
 
 # TSFC (thrust-specific fuel consumption) is fuel burned per unit thrust:
 #   TSFC [g/(N.s)] = 1000 * FuelFlow [kg/s] / Thrust [N]
-# Verified against the dataset to hold within ~1%. It ties the two performance
+# Checked against the shipped dataset: ~0.8% mean relative error, ~3% worst
+# case (rounding in the generating simulation). It ties the two performance
 # targets together; we predict thrust and *derive* TSFC from it.
 TSFC_FROM_FUEL_THRUST = 1000.0
 
