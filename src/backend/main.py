@@ -14,11 +14,11 @@ for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
            "LOKY_MAX_CPU_COUNT"):
     os.environ.setdefault(_v, "1")
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from schemas import EngineInfo, EngineState, SensorRow
-from service import TwinService
+from service import MAX_PROJECTION_CYCLES, TwinService
 
 app = FastAPI(title="Turbojet Digital Twin API", version="1.0")
 
@@ -72,7 +72,10 @@ def predict(row: SensorRow):
 
 
 @app.get("/api/engine/{engine_id}/simulate")
-def simulate(engine_id: int, to_cycle: int = 60):
+def simulate(
+    engine_id: int,
+    to_cycle: int = Query(60, ge=1, le=MAX_PROJECTION_CYCLES),
+):
     try:
         return twin.simulate(engine_id, to_cycle)
     except KeyError:

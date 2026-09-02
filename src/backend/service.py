@@ -22,6 +22,10 @@ from predict import Predictor, recommend  # noqa: E402
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
+# Ceiling on the forward projection horizon (GET /api/engine/{id}/simulate).
+# Engines in the dataset run 30 cycles; a few hundred is far past end-of-life.
+MAX_PROJECTION_CYCLES = 500
+
 # health-target column ↔ short component key used in the API
 COMPONENTS = {
     "CompressorHealth": "compressor",
@@ -208,9 +212,15 @@ class TwinService:
         We have no future sensor readings, so we extrapolate the linear
         degradation fit — a demonstration of long-term behaviour and the RUL
         estimate until live telemetry is available.
+
+        `to_cycle` is clamped to MAX_PROJECTION_CYCLES: the response carries one
+        float per component per cycle, so an unbounded horizon would let a
+        single request build an arbitrarily large payload. Extrapolating a
+        linear fit thousands of cycles past the data is meaningless anyway —
+        every component saturates at 0 long before that.
         """
-        traj = self._traj_cache[engine_id]
-        df = self._pred_cache[engine_id]
+        df = self._pred_cache[engine_id]          # KeyError -> 404 upstream
+        to_cycle = max(1, min(int(to_cycle), MAX_PROJECTION_CYCLES))
         last_cycle = int(df["Cycle"].max())
         cycles = list(range(1, to_cycle + 1))
         projection = {"engine_id": int(engine_id), "cycles": cycles, "components": {}}
