@@ -14,13 +14,33 @@ for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
            "LOKY_MAX_CPU_COUNT"):
     os.environ.setdefault(_v, "1")
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from schemas import EngineInfo, EngineState, SensorRow
 from service import MAX_PROJECTION_CYCLES, TwinService
 
-app = FastAPI(title="Turbojet Digital Twin API", version="1.0")
+# built once at startup — loads the ensemble and precomputes engine states
+twin: TwinService | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Build the twin before the first request, drop it on shutdown.
+
+    Every prediction is precomputed here, so the first request after a cold
+    start (Render's free tier sleeps the service) pays the model load once
+    rather than every endpoint checking whether the twin exists yet.
+    """
+    global twin
+    twin = TwinService()
+    yield
+    twin = None
+
+
+app = FastAPI(title="Turbojet Digital Twin API", version="1.0", lifespan=lifespan)
 
 # open CORS for local frontend dev (static server on :8080)
 app.add_middleware(
@@ -29,16 +49,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# built once at startup — loads the ensemble and precomputes engine states
-twin: TwinService | None = None
-
-
-@app.on_event("startup")
-def _startup():
-    global twin
-    twin = TwinService()
-
 
 @app.get("/api/health")
 def health():
