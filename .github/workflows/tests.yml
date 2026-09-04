@@ -1,0 +1,47 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      # Match the backend's thread caps. The runner has few cores and the
+      # gradient-boosting pools oversubscribe them badly without this.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      LOKY_MAX_CPU_COUNT: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Same interpreter Render builds with, so green here means the deploy
+          # runs the code these tests actually covered.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Train the surrogate
+        # The model artifact is not committed, and the API, constraint and
+        # metric tests all skip without it — build it here (~20 s) so the full
+        # suite actually runs.
+        run: python src/model/train.py
+
+      - name: Evaluate on the held-out split
+        # Writes artifacts/metrics.json, which tests/test_metrics.py asserts on.
+        run: python src/model/eval.py
+
+      - name: Run tests
+        run: pytest -q
