@@ -174,7 +174,7 @@ Frontend depends only on this schema — model internals can change freely behin
 
 ```
 src/backend/
-  main.py       FastAPI app, routes, CORS, startup load
+  main.py       FastAPI app, routes, CORS, lifespan model load
   schemas.py    pydantic contract models (EngineState, ...)
   service.py    wraps model/predict.py, builds EngineState, caches, alerts, simulate
 ```
