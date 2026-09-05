@@ -1,5 +1,7 @@
 # Turbojet Digital Twin
 
+[![tests](https://github.com/ankamteja/turbojet-digital-twin/actions/workflows/tests.yml/badge.svg)](https://github.com/ankamteja/turbojet-digital-twin/actions/workflows/tests.yml)
+
 A physics-informed digital twin for real-time health monitoring of a single-spool,
 four-stage turbojet engine. The system reconstructs hidden component health and predicts
 engine performance from a limited set of sensor measurements, and drives an interactive
@@ -151,6 +153,26 @@ cd ../frontend && python -m http.server 8080
 Optional: `python src/model/eval.py` writes test metrics, and
 `python src/model/generalize.py` runs the leave-one-engine-out generalization study.
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+Four layers, all run on every push by `.github/workflows/tests.yml`:
+
+| File | Guards |
+|------|--------|
+| `tests/test_physics.py` | The closed-form relations — TSFC identity, health aggregation, the degradation fit and its RUL edge cases |
+| `tests/test_model.py` | The hard constraints on the trained surrogate: health never rises with cycle all else equal, and TSFC is derived from predicted thrust |
+| `tests/test_api.py` | The `EngineState` contract the dashboard depends on, plus 404/422 handling |
+| `tests/test_metrics.py` | Per-target R² floors, so an accuracy regression fails the build |
+
+The physics tests need nothing but the repo. The rest skip unless the surrogate
+has been trained (`python src/model/train.py`) and evaluated
+(`python src/model/eval.py`); CI does both before running the suite.
+
 ## Repository layout
 
 ```
@@ -160,6 +182,7 @@ src/
   model/     feature engineering, surrogate ensemble, training, evaluation
   backend/   FastAPI service exposing the EngineState contract
   frontend/  vanilla-JS + Three.js dashboard
+tests/   physics, model-constraint, API-contract and accuracy tests
 ```
 
 ## Documentation
