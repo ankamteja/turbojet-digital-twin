@@ -53,7 +53,15 @@ async function boot() {
   // 1. engines
   let engines;
   try {
-    engines = await getEngines();
+    engines = await getEngines({
+      // The backend may be cold (Render free tier sleeps after ~15 min idle);
+      // getEngines retries for up to ~30-60s. Without this, that whole window
+      // looks blank to a visitor instead of "loading, hang on."
+      onRetry: (attempt, total) => {
+        const box = document.getElementById('sysLog');
+        if (box) box.innerHTML = `<div class="row"><span>waking backend (${attempt}/${total}) — cold start on free hosting, ~30-60s</span><span>...</span></div>`;
+      },
+    });
   } catch (err) {
     console.error('[JET] cannot reach backend:', err);
     const box = document.getElementById('sysLog');
