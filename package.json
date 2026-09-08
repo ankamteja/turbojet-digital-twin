@@ -1,0 +1,9 @@
+{
+  "name": "turbojet-digital-twin",
+  "private": true,
+  "type": "module",
+  "description": "Frontend has no build step; this file exists only to declare ES modules and wire `npm test` to Node's built-in test runner.",
+  "scripts": {
+    "test": "node --test tests/frontend/*.test.mjs"
+  }
+}
