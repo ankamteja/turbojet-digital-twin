@@ -233,6 +233,14 @@ single engine whose behaviour differs from the training nine is hard to
 extrapolate. This is the model's main honest limitation and the clearest target
 for future data collection.
 
+The −2.575 worst-case figure is not a typo: R² is negative whenever a model
+does *worse* than simply predicting the training mean for every row, so on
+that one held-out engine the surrogate's combustor estimate is meaningfully
+worse than a flat guess would have been. It is one engine out of ten, and the
+mean across all ten (0.459) is still informative — but it is a genuine
+failure mode on out-of-distribution engines, not a rounding artifact, and is
+tracked directly by `tests/test_generalize.py`.
+
 ### 5.3 Physics-consistency residuals
 
 From `metrics.json`:
