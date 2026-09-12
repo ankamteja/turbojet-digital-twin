@@ -6,7 +6,7 @@
 // Local dev: uvicorn on :8000. Deployed: the build step replaces the
 // __BACKEND_URL__ placeholder with the backend service's real host, so the
 // same file works in both places without editing.
-const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+export const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 const BASE = LOCAL ? 'http://localhost:8000' : 'https://__BACKEND_URL__';
 
 async function getJSON(path) {

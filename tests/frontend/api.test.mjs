@@ -81,3 +81,13 @@ test('per-cycle fetches (getState) do not retry', async () => {
   await assert.rejects(() => getState(1, 10));
   assert.equal(calls, 1);
 });
+
+test('LOCAL is true on localhost and false on the deployed host', async () => {
+  stubBrowserGlobals({ hostname: 'localhost' });
+  const local = await loadApi();
+  assert.equal(local.LOCAL, true);
+
+  stubBrowserGlobals({ hostname: 'turbojet-dashboard.onrender.com' });
+  const deployed = await loadApi();
+  assert.equal(deployed.LOCAL, false);
+});
