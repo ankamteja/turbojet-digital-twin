@@ -160,7 +160,7 @@ pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Four layers, all run on every push by `.github/workflows/tests.yml`:
+Five layers, all run on every push by `.github/workflows/tests.yml`:
 
 | File | Guards |
 |------|--------|
@@ -168,10 +168,20 @@ Four layers, all run on every push by `.github/workflows/tests.yml`:
 | `tests/test_model.py` | The hard constraints on the trained surrogate: health never rises with cycle all else equal, and TSFC is derived from predicted thrust |
 | `tests/test_api.py` | The `EngineState` contract the dashboard depends on, plus 404/422 handling |
 | `tests/test_metrics.py` | Per-target R² floors, so an accuracy regression fails the build |
+| `tests/test_generalize.py` | Leave-one-engine-out floors — including that combustor health's worst held-out engine doesn't get worse than already reported |
 
 The physics tests need nothing but the repo. The rest skip unless the surrogate
 has been trained (`python src/model/train.py`) and evaluated
-(`python src/model/eval.py`); CI does both before running the suite.
+(`python src/model/eval.py`); the LOEO test also needs
+`python src/model/generalize.py` (~90 s — retrains 10 times). CI runs all of it
+except the LOEO retrain, which is too slow to run on every push.
+
+The frontend has its own suite, no install step needed (Node's built-in test
+runner, no npm dependencies):
+
+```bash
+npm test
+```
 
 ## Repository layout
 

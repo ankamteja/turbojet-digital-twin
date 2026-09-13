@@ -45,3 +45,18 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Run tests
+        # No install step: the frontend is deliberately dependency-free
+        # (vanilla JS, no build step), and its tests use only Node's built-in
+        # test runner — see tests/frontend/helpers/dom_stub.mjs.
+        run: npm test
